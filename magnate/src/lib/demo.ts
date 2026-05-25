@@ -72,9 +72,28 @@ const TASK_TEMPLATES: Record<
   ],
 };
 
+function blogTitle(text: string): string {
+  const m = text.match(/(?:about|introducing|on|announcing|titled|called)\s+(.+)/i);
+  const raw = (m ? m[1] : "").replace(/[.?!]+$/g, "").trim();
+  return raw ? titleCase(raw.split(/\s+/).slice(0, 8).join(" ")) : "Introducing Avaratak";
+}
+
 /** Build a believable scripted reply for demo mode (no API key). */
 export function buildDemoScript({ employeeId, userText }: DemoInput): DemoStep[] {
   const steps: DemoStep[] = [];
+  const t = userText.toLowerCase();
+
+  const blogIntent = /\b(blog|post|article|publish|newsletter)\b/.test(t);
+  if (blogIntent && (employeeId === VERA_ID || employeeId === "casey")) {
+    const title = blogTitle(userText);
+    steps.push({ kind: "text", text: `On it — drafting a post for the Webflow blog now.\n\n` });
+    steps.push({ kind: "action", action: { type: "blog_post", title, status: "draft" } });
+    steps.push({
+      kind: "text",
+      text: `Drafted **${title}** and saved it to the Webflow CMS as a draft for review.\n\n_Demo mode — set both \`ANTHROPIC_API_KEY\` and \`WEBFLOW_API_TOKEN\` and I'll write the full post and push it to your Webflow blog for real._`,
+    });
+    return steps;
+  }
 
   if (employeeId !== VERA_ID) {
     const e = getEmployee(employeeId);
