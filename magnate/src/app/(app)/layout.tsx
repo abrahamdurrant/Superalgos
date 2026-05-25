@@ -2,14 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  LayoutDashboard,
-  Users,
-  KanbanSquare,
-  MessageSquare,
-  RotateCcw,
-  ArrowUpRight,
-} from "lucide-react";
+import { LayoutDashboard, Users, KanbanSquare, MessageSquare, RotateCcw } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { useStore } from "@/lib/store";
 import { useMounted } from "@/lib/useMounted";
@@ -32,7 +25,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen bg-ink">
       <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-white/8 bg-ink-900/80 px-4 py-5 lg:flex">
         <div className="px-2">
-          <Logo />
+          <Logo href="/dashboard" />
         </div>
 
         <div className="mt-6 rounded-xl border border-white/8 bg-ink-800/60 p-3">
@@ -68,20 +61,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <div className="space-y-1 border-t border-white/8 pt-4">
           <button
             onClick={() => {
-              if (confirm("Reset the demo workspace to its starting state?")) resetAll();
+              if (confirm("Reset the workspace to an empty starting state?")) resetAll();
             }}
             className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-mist-dim transition-colors hover:bg-white/5 hover:text-white"
           >
             <RotateCcw className="h-4 w-4" />
             Reset workspace
           </button>
-          <Link
-            href="/"
-            className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-mist-dim transition-colors hover:bg-white/5 hover:text-white"
-          >
-            <ArrowUpRight className="h-4 w-4" />
-            Marketing site
-          </Link>
         </div>
       </aside>
 
@@ -97,7 +83,7 @@ function MobileTopBar() {
   const pathname = usePathname();
   return (
     <div className="sticky top-0 z-40 flex items-center justify-between border-b border-white/8 bg-ink-900/85 px-4 py-3 backdrop-blur-xl lg:hidden">
-      <Logo size={26} />
+      <Logo size={26} href="/dashboard" />
       <nav className="flex items-center gap-1">
         {NAV.map((item) => {
           const active = pathname === item.href;

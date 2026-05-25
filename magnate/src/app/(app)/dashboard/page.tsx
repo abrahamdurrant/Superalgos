@@ -18,10 +18,10 @@ import { Avatar } from "@/components/Avatar";
 import type { Kpi } from "@/lib/types";
 
 const SUGGESTIONS = [
-  "Get us to 100 paying users",
-  "Plan a Product Hunt launch",
-  "Figure out our pricing",
+  "Write and publish a blog post introducing Avaratak",
+  "Draft our positioning and pricing",
   "Find our top 3 competitors",
+  "Plan our first launch",
 ];
 
 export default function DashboardPage() {
@@ -94,11 +94,17 @@ export default function DashboardPage() {
       </div>
 
       {/* KPIs */}
-      <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {kpis.map((k) => (
-          <StatCard key={k.id} kpi={k} />
-        ))}
-      </div>
+      {kpis.length === 0 ? (
+        <div className="card mt-6 p-5 text-sm text-mist-dim">
+          No metrics yet. Ask Vera to start tracking a KPI and it'll appear here.
+        </div>
+      ) : (
+        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {kpis.map((k) => (
+            <StatCard key={k.id} kpi={k} />
+          ))}
+        </div>
+      )}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1.4fr_1fr]">
         {/* Projects */}
@@ -158,6 +164,11 @@ export default function DashboardPage() {
         <section className="card p-5">
           <h2 className="font-semibold text-white">Recent activity</h2>
           <div className="mt-4 space-y-4">
+            {activity.length === 0 && (
+              <p className="text-sm text-mist-dim">
+                Nothing yet. Activity shows up as Vera and the team get to work.
+              </p>
+            )}
             {activity.slice(0, 8).map((a) => {
               const e = getEmployee(a.ownerId);
               return (

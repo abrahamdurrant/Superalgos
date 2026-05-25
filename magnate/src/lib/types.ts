@@ -82,4 +82,5 @@ export type AgentAction =
       status?: TaskStatus;
     }
   | { type: "hire"; employeeId: string }
-  | { type: "set_kpi"; label: string; value: string; delta?: string };
+  | { type: "set_kpi"; label: string; value: string; delta?: string }
+  | { type: "blog_post"; title: string; url?: string; status: "draft" | "published" };

@@ -8,6 +8,7 @@ import {
   workspaceSnapshot,
 } from "@/lib/persona";
 import { buildDemoScript } from "@/lib/demo";
+import { listBlogPosts, publishBlogPost } from "@/lib/webflow";
 import type { AgentAction, TaskStatus } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -89,6 +90,43 @@ const VERA_TOOLS: Anthropic.Tool[] = [
     },
   },
 ];
+
+const BLOG_TOOLS: Anthropic.Tool[] = [
+  {
+    name: "publish_blog_post",
+    description:
+      "Write a post to the company's Webflow blog. Creates a CMS draft by default; set publish=true only when explicitly told to go live. Provide a complete, ready-to-read post.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "The post title." },
+        body: {
+          type: "string",
+          description: "The full post content. Markdown or HTML; use headings and paragraphs.",
+        },
+        summary: { type: "string", description: "Optional short summary/excerpt." },
+        publish: {
+          type: "boolean",
+          description: "true = publish live now; false (default) = save as a draft.",
+        },
+      },
+      required: ["title", "body"],
+    },
+  },
+  {
+    name: "list_blog_posts",
+    description: "List recent posts already in the Webflow blog collection.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+];
+
+const BLOG_TOOL_NAMES = new Set(BLOG_TOOLS.map((t) => t.name));
+
+function toolsFor(employeeId: string): Anthropic.Tool[] {
+  if (employeeId === VERA_ID) return [...VERA_TOOLS, ...BLOG_TOOLS];
+  if (employeeId === "casey") return BLOG_TOOLS;
+  return [];
+}
 
 function toAction(name: string, input: Record<string, unknown>): { action: AgentAction; label: string } | null {
   switch (name) {
@@ -203,6 +241,11 @@ function toActionFromDemo(action: AgentAction): { action: AgentAction; label: st
       return { action, label: `Updated KPI "${action.label}"` };
     case "hire":
       return { action, label: `Hired ${action.employeeId}` };
+    case "blog_post":
+      return {
+        action,
+        label: `${action.status === "published" ? "Published" : "Drafted"} blog post "${action.title}"`,
+      };
   }
 }
 
@@ -214,7 +257,7 @@ async function runLive(
   incoming: ChatBody["messages"],
 ) {
   const client = new Anthropic({ apiKey });
-  const isVera = employeeId === VERA_ID;
+  const tools = toolsFor(employeeId);
 
   const system: Anthropic.TextBlockParam[] = [
     {
@@ -235,7 +278,7 @@ async function runLive(
       model: MODEL,
       max_tokens: 2048,
       system,
-      ...(isVera ? { tools: VERA_TOOLS } : {}),
+      ...(tools.length ? { tools } : {}),
       messages,
     });
 
@@ -253,7 +296,49 @@ async function runLive(
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
     for (const block of final.content) {
       if (block.type !== "tool_use") continue;
-      const built = toAction(block.name, block.input as Record<string, unknown>);
+      const input = block.input as Record<string, unknown>;
+
+      // Server-executed tools (real Webflow side effects).
+      if (BLOG_TOOL_NAMES.has(block.name)) {
+        if (block.name === "publish_blog_post") {
+          const res = await publishBlogPost({
+            title: String(input.title ?? "Untitled"),
+            body: String(input.body ?? ""),
+            summary: input.summary ? String(input.summary) : undefined,
+            publish: Boolean(input.publish),
+          });
+          if (res.ok) {
+            sse(controller, {
+              type: "action",
+              action: {
+                type: "blog_post",
+                title: String(input.title ?? "Untitled"),
+                url: res.url,
+                status: res.status ?? "draft",
+              },
+              label: res.message,
+            });
+          }
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: res.message,
+            is_error: !res.ok,
+          });
+        } else {
+          const res = await listBlogPosts();
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: res.message,
+            is_error: !res.ok,
+          });
+        }
+        continue;
+      }
+
+      // Client-applied tools (project / task / KPI / hire).
+      const built = toAction(block.name, input);
       if (built) {
         sse(controller, { type: "action", action: built.action, label: built.label });
         toolResults.push({

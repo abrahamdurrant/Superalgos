@@ -60,7 +60,7 @@ const WELCOME: ChatMessage = {
   role: "assistant",
   authorId: VERA_ID,
   content:
-    "I'm Vera, your CEO. I've got the launch and content engines moving. Tell me a goal — \"get us to 100 paying users\", \"prep the Product Hunt launch\", \"figure out pricing\" — and I'll break it down, put the team on it, and report back. What should we tackle?",
+    "I'm Vera, your CEO at Avaratak. Clean slate — tell me what you want to get done and I'll break it into projects, put the team on it, and track the numbers. I can also publish posts to our Webflow blog. Try: \"write and publish a blog post introducing Avaratak\", or tell me a goal and I'll get the team moving.",
   createdAt: Date.now(),
 };
 
@@ -153,6 +153,14 @@ export const useStore = create<MagnateState>()(
             get().logActivity(VERA_ID, `Brought a new employee onto the team.`);
             return `Hired a new employee`;
           }
+          case "blog_post": {
+            const verb = action.status === "published" ? "Published" : "Drafted";
+            get().logActivity(
+              "casey",
+              `${verb} blog post "${action.title}" ${action.status === "published" ? "live on" : "as a draft in"} Webflow.`,
+            );
+            return `${verb} blog post "${action.title}"`;
+          }
           case "set_kpi": {
             set((st) => {
               const existing = st.kpis.find(
@@ -190,6 +198,6 @@ export const useStore = create<MagnateState>()(
           messages: [WELCOME],
         }),
     }),
-    { name: "magnate-store-v1" },
+    { name: "magnate-store-v2" },
   ),
 );
