@@ -292,3 +292,17 @@ test('detect-datasets enables exactly what the plan covers', async () => {
     assert.equal(engine.settings.data.datasets.insiders, false)
   } finally { ui.close() }
 })
+
+test('state ships the Form 4 legend so the UI can explain any code', async () => {
+  const { ui, base, token } = await boot()
+  try {
+    const s = await (await fetch(`${base}/api/state?token=${token}`)).json()
+    assert.ok(Array.isArray(s.form4Codes) && s.form4Codes.length >= 20, 'the full code table must be present')
+    const c = s.form4Codes.find(x => x.code === 'C')
+    assert.match(c.meaning, /Conversion of a derivative security/)
+    assert.equal(c.tradeable, false)
+    const p = s.form4Codes.find(x => x.code === 'P')
+    assert.equal(p.tradeable, true)
+    assert.equal(s.form4Codes.filter(x => x.tradeable).length, 2, 'only P and S are decisions')
+  } finally { ui.close() }
+})

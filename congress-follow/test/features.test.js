@@ -325,9 +325,19 @@ test('insider grants and option exercises are not mistaken for purchases', async
   const ds = datasetById('insiders')
   assert.equal(form4Side({ TransactionCode: 'P' }), 'Purchase')
   assert.equal(form4Side({ TransactionCode: 'S' }), 'Sale')
-  for (const code of ['A', 'M', 'F', 'G', 'X']) {
-    assert.match(form4Side({ TransactionCode: code }), /^Form4:/, `${code} must not look like a trade`)
+  // Non-P/S codes render as plain English so a row explains itself, and must
+  // never read as a purchase or a sale.
+  const { FORM4_CODES } = await import('../src/datasets.js')
+  for (const code of Object.keys(FORM4_CODES)) {
+    if (code === 'P' || code === 'S') continue
+    const label = form4Side({ TransactionCode: code })
+    assert.match(label, new RegExp(`\\(${code}\\)$`), `${code} must show its code`)
+    assert.notEqual(label, 'Purchase')
+    assert.notEqual(label, 'Sale')
+    assert.doesNotMatch(label.toLowerCase(), /^(purchase|sale)$/)
   }
+  assert.match(form4Side({ TransactionCode: 'C' }), /Conversion of a derivative security \(C\)/)
+  assert.match(form4Side({ TransactionCode: 'ZZZ' }), /Unrecognised Form 4 code/)
   const n = ds.normalise({ Ticker: 'NVDA', Name: 'Jensen Huang', TransactionCode: 'S', Shares: 1000, PricePerShare: 100, Date: '2026-08-01', fileDate: '2026-08-03', officerTitle: 'CEO', isOfficer: true })
   assert.equal(n.amount, 100000, 'value is shares x price, which the API does not provide directly')
   assert.equal(n.chamber, 'CEO')

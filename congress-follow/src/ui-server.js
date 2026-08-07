@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
-import { ALL_DATASETS } from './datasets.js'
+import { ALL_DATASETS, FORM4_CODES, MEANINGFUL_FORM4_CODES } from './datasets.js'
 import { Engine } from './engine.js'
 import { log } from './log.js'
 import { renderPage } from './ui-page.js'
@@ -58,6 +58,11 @@ export class UiServer {
       dryRunForcedByEnv: this.engine.settings.dryRunForcedByEnv,
       settings: this.engine.settings.data,
       datasetCatalog: ALL_DATASETS().map(d => ({ id: d.id, label: d.label, plan: d.plan, signalSource: d.signalSource !== false })),
+      // Form 4 codes are opaque three-letter jargon; ship the legend so the UI
+      // can explain every row rather than showing a bare code.
+      form4Codes: Object.entries(FORM4_CODES).map(([code, meaning]) => ({
+        code, meaning, tradeable: MEANINGFUL_FORM4_CODES.has(code)
+      })),
       datasetStatus: this.engine.datasetStatus,
       allocationsLoaded: this.engine.allocations ? this.engine.allocations.byPolitician.size : null,
       accountId: this.engine.broker.accountId,
@@ -181,7 +186,16 @@ export class UiServer {
             const { byNewest } = await import('./performance.js')
             // Newest first: the API does not guarantee an order, and the most
             // recent disclosure is what matters when deciding to act.
-            const rows = raw.map(r => ({ ...ds.normalise(r), dataset: ds.id })).sort(byNewest)
+            const rows = raw.map(r => {
+              const n = ds.normalise(r)
+              return {
+                ...n,
+                dataset: ds.id,
+                // Surfaced so the row can show whether it is an actual decision.
+                form4Code: n.insider?.transactionCode ?? null,
+                tradeable: n.transaction === 'Purchase' || n.transaction === 'Sale'
+              }
+            }).sort(byNewest)
             return { dataset: ds.id, label: ds.label, rows: rows.slice(0, 100) }
           } catch (err) {
             // When a dataset with a known plan requirement is refused, the cause

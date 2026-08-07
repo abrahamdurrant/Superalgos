@@ -9,13 +9,52 @@ import { log } from './log.js'
  */
 export const MEANINGFUL_FORM4_CODES = new Set(['P', 'S'])
 
+/**
+ * Official SEC Form 4 transaction codes.
+ * Only P and S are discretionary open-market decisions. Everything else is
+ * compensation mechanics, a derivative event, or an administrative transfer,
+ * and treating any of them as a conviction trade would be wrong.
+ */
+export const FORM4_CODES = {
+  // General
+  P: 'Open-market purchase',
+  S: 'Open-market sale',
+  V: 'Reported early (voluntary)',
+  // Rule 16b-3 exempt
+  A: 'Grant or award',
+  D: 'Disposition to the issuer',
+  F: 'Shares withheld for tax or exercise price',
+  I: 'Discretionary plan transaction',
+  M: 'Option exercise or conversion (16b-3 exempt)',
+  // Derivative securities
+  C: 'Conversion of a derivative security',
+  E: 'Expiration of a short derivative position',
+  H: 'Expiration of a long derivative position, value received',
+  O: 'Exercise of an out-of-the-money derivative',
+  X: 'Exercise of an in- or at-the-money derivative',
+  // Exempt and small acquisitions
+  G: 'Bona fide gift',
+  L: 'Small acquisition (Rule 16a-6)',
+  W: 'Acquired or disposed by will or inheritance',
+  Z: 'Voting trust deposit or withdrawal',
+  // Other
+  J: 'Other acquisition or disposition',
+  K: 'Equity swap or similar instrument',
+  U: 'Disposition through a tender offer'
+}
+
+export function form4Label (code) {
+  const c = String(code ?? '').trim().toUpperCase()
+  return FORM4_CODES[c] ? `${FORM4_CODES[c]} (${c})` : `Unrecognised Form 4 code (${c || '?'})`
+}
+
 export function form4Side (r) {
   const code = String(r.TransactionCode ?? '').trim().toUpperCase()
   if (code === 'P') return 'Purchase'
   if (code === 'S') return 'Sale'
-  // Anything else is not a discretionary open-market trade. Surface the code so
-  // the evaluator skips it with a readable reason instead of guessing a side.
-  return `Form4:${code || 'unknown'}`
+  // Not a discretionary trade. Return the plain-English meaning so the row is
+  // self-explanatory and the evaluator skips it with a readable reason.
+  return form4Label(code)
 }
 
 export function insiderRole (r) {

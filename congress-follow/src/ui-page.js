@@ -403,6 +403,18 @@ async function loadPerf(){
   }catch(e){$('perf').innerHTML='<div class="err">'+esc(e.message)+'</div>'}
 }
 
+function showForm4Legend(){
+  const rows=(STATE.form4Codes||[]).map(c=>
+    '<tr'+(c.tradeable?'':' class="dim"')+'><td class="tick">'+esc(c.code)+'</td><td>'+esc(c.meaning)+'</td>'+
+    '<td>'+(c.tradeable?'<span class="pill">tradeable</span>':'<span class="sub">informational</span>')+'</td></tr>').join('');
+  confirmDialog('SEC Form 4 transaction codes',
+    '<p class="sub">Every insider filing carries one of these. Only <b>P</b> and <b>S</b> are discretionary '+
+    'open-market decisions — the rest are compensation mechanics, derivative events or administrative '+
+    'transfers, so this tool never treats them as buy or sell signals.</p>'+
+    '<div class="wrap" style="max-height:50vh;overflow-y:auto"><table><thead><tr><th>Code</th><th>Meaning</th><th></th></tr></thead><tbody>'+
+    rows+'</tbody></table></div>','Close');
+}
+
 function isFollowed(name,id){
   return (STATE.following||[]).some(f=>
     (id&&f.bioGuideId&&String(f.bioGuideId).toUpperCase()===String(id).toUpperCase())||
@@ -486,24 +498,40 @@ async function loadExplore(dsId){
     esc(d.label)+(d.plan==='Hobbyist'?'':' — needs API '+esc(d.plan)+' plan')+'</option>').join('')+'</select>';
   $('expl').innerHTML='<div class="fld" style="padding:12px 15px">'+sel+
     ' <input id="expl_tk" class="mini" style="width:110px" placeholder="ticker (optional)"> '+
-    '<button id="expl_go" class="mini primary">Load</button></div><div id="expl_rows"></div>';
+    '<button id="expl_go" class="mini primary">Load</button>'+
+    '<label class="sub" style="margin-left:12px"><input type="checkbox" id="expl_only"> real buys and sells only</label>'+
+    '<button id="expl_legend" class="mini" style="margin-left:8px">Form 4 codes</button>'+
+    '</div><div id="expl_rows"></div>';
   $('expl_ds').onchange=()=>loadExplore($('expl_ds').value);
+  $('expl_legend').onclick=()=>showForm4Legend();
   $('expl_go').onclick=async()=>{
     const id=$('expl_ds').value, tk=$('expl_tk').value.trim();
     $('expl_rows').innerHTML='<div class="empty">Loading…</div>';
     try{
       const r=await api('/api/browse',{method:'POST',body:JSON.stringify({dataset:id,ticker:tk||undefined})});
-      $('expl_rows').innerHTML=r.rows.length?'<div class="wrap"><table><thead><tr><th>Trade</th><th>Size</th><th>Dates</th><th>Buy</th><th>Watchlist</th></tr></thead><tbody>'+
-        r.rows.map((n,i)=>'<tr><td><span class="side '+(String(n.transaction).includes("Purchase")?"BUY":"SELL")+'">'+esc(n.transaction)+'</span> '+
+      const onlyTradeable=$('expl_only').checked;
+      const shown=onlyTradeable?r.rows.filter(x=>x.tradeable!==false):r.rows;
+      const hidden=r.rows.length-shown.length;
+      r.rows=shown;
+      $('expl_rows').innerHTML=(hidden?'<div class="sub" style="padding:8px 15px">'+hidden+
+        ' row(s) hidden: not open-market buys or sales. Uncheck the filter to see them with their meanings.</div>':'')+
+        (r.rows.length?'<div class="wrap"><table><thead><tr><th>Trade</th><th>Size</th><th>Dates</th><th>Buy</th><th>Watchlist</th></tr></thead><tbody>'+
+        r.rows.map((n,i)=>{
+          const isBuy=n.transaction==='Purchase', isSell=n.transaction==='Sale';
+          const cls=isBuy?'BUY':isSell?'SELL':'';
+          const label=isBuy||isSell
+            ? '<span class="side '+cls+'">'+esc(n.transaction)+'</span>'
+            : '<span class="pill" title="Not an open-market decision, so it is not treated as a trade">'+esc(n.transaction)+'</span>';
+          return '<tr'+(isBuy||isSell?'':' class="dim"')+'><td>'+label+' '+
           '<span class="tick">'+esc(n.ticker||'—')+'</span><div class="sub">'+esc(n.actor||'')+(n.chamber?' · '+esc(n.chamber):'')+'</div></td>'+
           '<td>'+esc(n.range||(n.amount?usd(n.amount):'—'))+'</td>'+
           '<td class="sub">traded '+esc(n.transactionDate||'?')+'<br>filed '+esc(n.reportDate||'?')+'</td>'+
-          '<td>'+(n.ticker?'<input class="mini" style="width:80px" id="amt_'+i+'" type="number" min="1" placeholder="$"> '+
+          '<td>'+(n.ticker&&isBuy?'<input class="mini" style="width:80px" id="amt_'+i+'" type="number" min="1" placeholder="$"> '+
             '<select class="mini" id="acc_'+i+'">'+accountOptions(null)+'</select> '+
             '<button class="mini buyrow" data-i="'+i+'" data-t="'+esc(n.ticker)+'" data-s="'+esc(id)+'">Queue</button>':'')+'</td>'+
           '<td>'+(n.actor?'<button class="mini followrow" data-n="'+esc(n.actor)+'" data-id="'+esc(n.actorId||'')+'">'+
-            (isFollowed(n.actor,n.actorId)?'Following':'Follow')+'</button>':'')+'</td></tr>').join('')+
-        '</tbody></table></div>':'<div class="empty">No rows.</div>';
+            (isFollowed(n.actor,n.actorId)?'Following':'Follow')+'</button>':'')+'</td></tr>'}).join('')+
+        '</tbody></table></div>':'<div class="empty">No rows.</div>');
       document.querySelectorAll('.buyrow').forEach(b=>b.onclick=()=>queueBuy(b.dataset.t,$('amt_'+b.dataset.i).value,$('acc_'+b.dataset.i).value,b.dataset.s));
       document.querySelectorAll('.followrow').forEach(b=>b.onclick=()=>doFollow(b.dataset.n,b.dataset.id,b));
     }catch(e){
@@ -519,6 +547,7 @@ async function loadExplore(dsId){
         : '<div class="err">'+esc(e.message)+'</div>';
     }
   };
+  $('expl_only').onchange=()=>$('expl_go').click();
   $('expl_go').click();
 }
 

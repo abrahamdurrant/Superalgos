@@ -166,3 +166,11 @@ test('Explore offers Follow and Following offers Unfollow', () => {
   assert.match(js, /\/api\/unfollow/)
   assert.match(js, /isFollowed/, 'the button must reflect current state')
 })
+
+test('Form 4 codes are explained in the UI, not shown raw', () => {
+  const js = extractJs(renderPage('tok'))
+  assert.match(js, /showForm4Legend/, 'a code legend must be reachable')
+  assert.match(js, /form4Codes/, 'the legend is driven by the server-supplied table')
+  assert.match(js, /tradeable/, 'rows must distinguish decisions from mechanics')
+  assert.doesNotMatch(js, /Form4:/, 'the raw Form4:X form must not appear in the UI')
+})
