@@ -244,7 +244,10 @@ function settingsForm(s){
       '<div class="hint">Allocation percentages apply to this.</div></div>'+
       '<div class="fld"><label>Min per trade</label><input id="s_min" type="number" min="0" value="'+esc(z.sizing.minNotionalUsd)+'"></div>'+
       '<div class="fld"><label>Max per trade</label><input id="s_max" type="number" min="0" value="'+esc(z.sizing.maxNotionalUsd)+'"></div></div>'+
-    '<div class="fld"><label>Datasets</label>'+ds+'</div>'+
+    '<div class="fld"><label>Datasets</label>'+ds+
+      '<button id="s_detect" class="mini" style="margin-top:8px">Detect what my plan covers</button>'+
+      '<div class="hint">Probes every dataset and switches on exactly the ones your Quiver API plan '+
+      'entitles. Run this after changing plans.</div></div>'+
     '<div class="fld"><label>Default account</label><select id="s_acct">'+accountOptions(z.routing?.defaultAccountId)+'</select></div>'+
     '<div class="fld"><label><input type="checkbox" id="s_auto"'+(z.automation?.enabled?' checked':'')+'>Enable automation</label>'+
       '<div class="hint">Polls and submits every order that passes the guardrails, with no click.</div></div>'+
@@ -280,6 +283,19 @@ async function openSettings(){
       })});
       $('sdlg').close();await load();
     }catch(e){await confirmDialog('Could not save','<p>'+esc(e.message)+'</p>','Close')}
+  };
+  $('s_detect').onclick=async()=>{
+    $('s_detect').disabled=true;$('s_detect').textContent='Probing…';
+    try{
+      const r=await api('/api/detect-datasets',{method:'POST'});
+      await load();
+      $('sdlg').close();
+      await confirmDialog('Plan check',
+        '<pre>'+esc(r.results.map(x=>(x.ok?'OK  ':'403 ')+x.label+(x.ok?'':'  — '+x.error)).join('\\n'))+'</pre>'+
+        '<p class="sub">'+r.enabled.length+' dataset(s) enabled.</p>','Close');
+      openSettings();
+    }catch(e){await confirmDialog('Probe failed','<p>'+esc(e.message)+'</p>','Close')}
+    finally{if($('s_detect')){$('s_detect').disabled=false;$('s_detect').textContent='Detect what my plan covers'}}
   };
   $('sc').onclick=()=>$('sdlg').close();
   $('sdlg').showModal();

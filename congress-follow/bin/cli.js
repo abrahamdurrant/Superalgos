@@ -362,6 +362,31 @@ async function main () {
 
     case 'quiver-check': {
       const quiver = new QuiverClient()
+      if (flags.has('--datasets') || flags.has('--enable-available')) {
+        const { ALL_DATASETS } = await import('../src/datasets.js')
+        const { Settings } = await import('../src/settings.js')
+        const list = ALL_DATASETS()
+        console.log(`Probing ${list.length} datasets against your plan...\n`)
+        const results = await quiver.probeDatasets(list)
+        for (const r of results) {
+          console.log(`  ${(r.ok ? 'OK ' : '403').padEnd(4)} ${r.label.padEnd(34)} ${String(r.plan).padEnd(9)} ${r.ok ? `${r.rows} row(s)` : r.error}`)
+        }
+        const available = results.filter(r => r.ok)
+        console.log(`\n${available.length} of ${results.length} datasets are available on your plan.`)
+
+        if (flags.has('--enable-available')) {
+          const settings = new Settings()
+          const patch = {}
+          for (const r of results) patch[r.id] = r.ok
+          settings.update({ datasets: patch })
+          console.log(`Enabled: ${available.map(r => r.id).join(', ')}`)
+          const off = results.filter(r => !r.ok)
+          if (off.length) console.log(`Left off: ${off.map(r => r.id).join(', ')}`)
+        } else {
+          console.log('Run with --enable-available to switch the available ones on.')
+        }
+        break
+      }
       const { describeSecrets } = await import('../src/secrets.js')
       const key = describeSecrets().find(x => x.varName === 'QUIVER_API_KEY')
       console.log(`Stored key: ${key?.fingerprint ?? 'MISSING'}  (source: ${key?.source ?? 'none'})`)
@@ -440,7 +465,8 @@ Usage:
   congress-follow performance          Per-source returns, best 365d first
                                        (--sort year|all|month|excess|trades, --min-trades N, --by-dataset)
   congress-follow peek <dataset>       Inspect a dataset's real rows (--raw for full records)
-  congress-follow quiver-check         Probe each Quiver endpoint and diagnose a 401
+  congress-follow quiver-check         Diagnose a 401 (--datasets to probe every dataset,
+                                       --enable-available to switch on what your plan covers)
 
 Secrets:
   congress-follow secrets              Show where each key resolves from

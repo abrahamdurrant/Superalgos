@@ -127,6 +127,17 @@ export class UiServer {
         .catch(e => send(400, { error: e.message }))
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/detect-datasets') {
+      return (async () => {
+        const { ALL_DATASETS } = await import('./datasets.js')
+        const results = await this.engine.quiver.probeDatasets(ALL_DATASETS())
+        const patch = {}
+        for (const r of results) patch[r.id] = r.ok
+        this.engine.settings.update({ datasets: patch })
+        return { results, enabled: results.filter(r => r.ok).map(r => r.id) }
+      })().then(r => send(200, r)).catch(e => send(500, { error: e.message }))
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/follow') {
       return this.#readJson(req)
         .then(b => this.engine.follow(b))

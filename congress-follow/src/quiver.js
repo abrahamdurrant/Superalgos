@@ -45,6 +45,31 @@ export class QuiverClient {
   }
 
   /**
+   * Probe every dataset once and report which the current plan actually covers.
+   * Used to confirm an upgrade landed and to enable exactly what is entitled.
+   */
+  async probeDatasets (datasets) {
+    const out = []
+    for (const ds of datasets) {
+      try {
+        const rows = await this.fetchDataset(ds.path, ds.path.includes('/bulk/') ? { page_size: 1 } : {})
+        out.push({ id: ds.id, label: ds.label, plan: ds.plan, ok: true, rows: rows.length })
+      } catch (err) {
+        const denied = /HTTP 40[13]/.test(err.message)
+        out.push({
+          id: ds.id,
+          label: ds.label,
+          plan: ds.plan,
+          ok: false,
+          denied,
+          error: denied ? `not included in your plan (needs ${ds.plan})` : err.message.split('\n')[0]
+        })
+      }
+    }
+    return out
+  }
+
+  /**
    * Probe several endpoints and report the raw status and body for each.
    * Distinguishes a bad key (every endpoint 401s identically) from a plan that
    * does not entitle one particular dataset (mixed statuses).

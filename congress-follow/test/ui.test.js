@@ -277,3 +277,18 @@ test('follow and unfollow work through the UI', async () => {
     assert.equal(JSON.parse(rf(wlPath, 'utf8')).follow.length, 0)
   } finally { ui.close(); delete process.env.WATCHLIST_PATH }
 })
+
+test('detect-datasets enables exactly what the plan covers', async () => {
+  const { ui, engine, base, token } = await boot()
+  engine.quiver.probeDatasets = async (list) => list.map(d => ({
+    id: d.id, label: d.label, plan: d.plan, ok: d.plan === 'Hobbyist', denied: d.plan !== 'Hobbyist', rows: 1,
+    error: d.plan !== 'Hobbyist' ? `not included in your plan (needs ${d.plan})` : undefined
+  }))
+  try {
+    const r = await (await fetch(`${base}/api/detect-datasets?token=${token}`, { method: 'POST' })).json()
+    assert.ok(r.enabled.includes('congresstrading'))
+    assert.ok(!r.enabled.includes('insiders'), 'a Trader dataset must not be enabled on Hobbyist')
+    assert.equal(engine.settings.data.datasets.congresstrading, true)
+    assert.equal(engine.settings.data.datasets.insiders, false)
+  } finally { ui.close() }
+})

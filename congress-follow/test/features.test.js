@@ -523,3 +523,31 @@ test('editing the watchlist preserves unrelated keys in the file', () => {
   assert.deepEqual(after.rules.sides, ['BUY'])
   delete process.env.WATCHLIST_PATH
 })
+
+// ---- plan detection ----
+test('probeDatasets reports which datasets the plan covers', async () => {
+  const { QuiverClient } = await import('../src/quiver.js')
+  const { ALL_DATASETS } = await import('../src/datasets.js')
+  const q = new QuiverClient({ baseUrl: 'http://x', apiKey: 'k' })
+  q.fetchDataset = async (path) => {
+    if (/insiders|sec13f/.test(path)) throw new Error(`Quiver ${path} failed: HTTP 403`)
+    return [{}, {}]
+  }
+  const r = await q.probeDatasets(ALL_DATASETS())
+  const insiders = r.find(x => x.id === 'insiders')
+  const congress = r.find(x => x.id === 'congresstrading')
+  assert.equal(insiders.ok, false)
+  assert.equal(insiders.denied, true)
+  assert.match(insiders.error, /needs Trader/)
+  assert.equal(congress.ok, true)
+  assert.equal(congress.rows, 2)
+})
+
+test('a probe failure that is not a plan issue is reported as itself', async () => {
+  const { QuiverClient } = await import('../src/quiver.js')
+  const q = new QuiverClient({ baseUrl: 'http://x', apiKey: 'k' })
+  q.fetchDataset = async () => { throw new Error('socket hang up') }
+  const r = await q.probeDatasets([{ id: 'a', label: 'A', path: '/a', plan: 'Hobbyist' }])
+  assert.equal(r[0].denied, false)
+  assert.match(r[0].error, /socket hang up/)
+})
