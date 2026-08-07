@@ -129,7 +129,7 @@ async function main () {
         // --stdin lets you pipe from another tool without the value hitting the screen.
         const value = flags.has('--stdin')
           ? readFileSync(0, 'utf8').trim()
-          : readHidden(`Paste ${SECRET_VARS[varName].label} (input hidden): `)
+          : await readHidden(`Paste ${SECRET_VARS[varName].label} (input hidden): `)
         if (!value) throw new Error('No value provided.')
         storeSecret(varName, value)
         console.log(`Stored ${varName} in ${keychainName()}.`)

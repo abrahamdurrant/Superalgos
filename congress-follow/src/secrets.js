@@ -1,5 +1,7 @@
 import { execFileSync, execSync, spawnSync } from 'node:child_process'
-import { existsSync, statSync, readFileSync, mkdirSync, chmodSync } from 'node:fs'
+import { existsSync, statSync, readFileSync, mkdirSync, chmodSync, unlinkSync } from 'node:fs'
+import { createInterface } from 'node:readline'
+import { Writable } from 'node:stream'
 import { resolve, dirname } from 'node:path'
 import { homedir, platform } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -39,6 +41,9 @@ function fromCommand (varName) {
  * ------------------------------------------------------------------ */
 
 const dpapiFile = account => resolve(homedir(), '.congress-follow', `${account}.dpapi`)
+
+// PowerShell single-quoted strings escape a quote by doubling it.
+const psQuote = value => `'${String(value).replace(/'/g, "''")}'`
 
 function keychainKind () {
   const p = platform()
@@ -85,7 +90,7 @@ function fromKeychain (varName) {
         const file = dpapiFile(account)
         if (!existsSync(file)) return null
         value = execFileSync('powershell', ['-NoProfile', '-Command',
-          `$s = Get-Content -Raw '${file}' | ConvertTo-SecureString; ` +
+          `$s = Get-Content -Raw ${psQuote(file)} | ConvertTo-SecureString; ` +
           '[Runtime.InteropServices.Marshal]::PtrToStringAuto(' +
           '[Runtime.InteropServices.Marshal]::SecureStringToBSTR($s))'
         ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
@@ -123,7 +128,7 @@ export function storeSecret (varName, value) {
       mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
       const r = spawnSync('powershell', ['-NoProfile', '-Command',
         `$in = [Console]::In.ReadToEnd().Trim(); ` +
-        `ConvertTo-SecureString $in -AsPlainText -Force | ConvertFrom-SecureString | Set-Content -Path '${file}'`
+        `ConvertTo-SecureString $in -AsPlainText -Force | ConvertFrom-SecureString | Set-Content -Path ${psQuote(file)}`
       ], { input: value, stdio: ['pipe', 'ignore', 'pipe'] })
       if (r.status !== 0) throw new Error(`DPAPI write failed: ${r.stderr}`)
       chmodSync(file, 0o600)
@@ -148,7 +153,7 @@ export function deleteSecret (varName) {
         break
       case 'windows': {
         const file = dpapiFile(account)
-        if (existsSync(file)) execFileSync('rm', ['-f', file], { stdio: 'ignore' })
+        if (existsSync(file)) unlinkSync(file)
         break
       }
       default:
@@ -270,16 +275,30 @@ export function doctor () {
   return findings
 }
 
-/** Read a line from the terminal without echoing it. */
-export function readHidden (prompt) {
-  process.stdout.write(prompt)
-  // `read -s` keeps the secret off the screen and out of argv.
-  try {
-    const value = execSync('read -rs value < /dev/tty && printf %s "$value"', { shell: '/bin/bash', encoding: 'utf8' })
-    process.stdout.write('\n')
-    return value
-  } catch {
-    process.stdout.write('\n')
-    throw new Error('Could not read from the terminal. Pipe the secret instead: echo -n "KEY" | node bin/cli.js secrets set VAR --stdin')
-  }
+/**
+ * Read a line from the terminal without echoing it.
+ * Uses readline with a muted output stream so it works identically on
+ * Windows, macOS and Linux - shelling out to `read -s` would be Unix-only.
+ */
+export function readHidden (promptText) {
+  return new Promise((res, rej) => {
+    if (!process.stdin.isTTY) {
+      rej(new Error('Not an interactive terminal. Pipe the secret instead:\n  echo|set /p="KEY"| node bin/cli.js secrets set VAR --stdin'))
+      return
+    }
+    let muted = false
+    const muffled = new Writable({
+      write (chunk, encoding, done) {
+        if (!muted) process.stdout.write(chunk, encoding)
+        done()
+      }
+    })
+    const rl = createInterface({ input: process.stdin, output: muffled, terminal: true })
+    rl.question(promptText, answer => {
+      rl.close()
+      process.stdout.write('\n')
+      res(answer.trim())
+    })
+    muted = true // everything after the prompt itself is swallowed
+  })
 }

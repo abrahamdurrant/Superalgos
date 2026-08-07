@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -93,4 +94,29 @@ test('doctor warns about an over-long access token lifetime', () => {
      console.log(JSON.stringify(doctor()))`,
     { PUBLIC_TOKEN_MINUTES: '1440' }))
   assert.ok(findings.some(f => f.level === 'warn' && /shorter access-token lifetime/i.test(f.msg)))
+})
+
+test('the hidden prompt fails with an actionable message when stdin is not a terminal', async () => {
+  // Regression: this previously shelled out to `read -s` under /bin/bash,
+  // which does not exist on Windows.
+  const out = run(
+    `import { readHidden } from './src/secrets.js'
+     readHidden('x: ').then(() => console.log('RESOLVED'), e => console.log(e.message))`
+  )
+  assert.match(out, /Not an interactive terminal/)
+  assert.match(out, /--stdin/)
+})
+
+test('secrets module contains no Unix-only shell-outs', () => {
+  const src = readFileSync(resolve(root, 'src/secrets.js'), 'utf8')
+  assert.doesNotMatch(src, /\/bin\/bash/, 'must not depend on bash')
+  assert.doesNotMatch(src, /execFileSync\('rm'/, 'must not depend on Unix rm')
+  assert.doesNotMatch(src, /\/dev\/tty/, 'must not depend on /dev/tty')
+})
+
+test('PowerShell paths containing an apostrophe are escaped, not broken', () => {
+  const src = readFileSync(resolve(root, 'src/secrets.js'), 'utf8')
+  assert.match(src, /psQuote/, 'DPAPI commands must quote paths through psQuote')
+  // Both the read and write commands must use it.
+  assert.equal((src.match(/psQuote\(file\)/g) || []).length, 2)
 })

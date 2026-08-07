@@ -61,10 +61,19 @@ Resolution order, most secure first. The first hit wins.
 | 3 | `<VAR>` environment variable | Plaintext in the process env | Short-lived shells, CI |
 | 4 | `.env` file | **Plaintext on disk** | Discouraged — `doctor` flags it |
 
-The keychain backend is chosen per platform: **macOS Keychain** (`security`),
-**Secret Service / libsecret** on Linux (`secret-tool`, from `libsecret-tools`),
-and **DPAPI** per-user encryption on Windows. If none is present, the tool tells
+The keychain backend is chosen per platform. If none is present, the tool tells
 you and points at the `_CMD` route instead of silently degrading.
+
+| Platform | Backend | Needs |
+| --- | --- | --- |
+| macOS | Keychain via `security` | Nothing — built in |
+| Windows | DPAPI, encrypted per Windows user | Nothing — PowerShell is built in |
+| Linux | Secret Service via `secret-tool` | `sudo apt install libsecret-tools` |
+
+On Windows the key is encrypted with your Windows account credentials and written
+to `%USERPROFILE%\.congress-follow\`. Another user on the same PC cannot decrypt
+it, even with the file. Note this is tied to your Windows account, so it does not
+survive a reinstall — keep the key recoverable from Public's settings page.
 
 ### Pulling from a password manager (strongest option)
 
