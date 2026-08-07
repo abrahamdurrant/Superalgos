@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
-import { DATASETS } from './datasets.js'
+import { ALL_DATASETS } from './datasets.js'
 import { Engine } from './engine.js'
 import { log } from './log.js'
 import { renderPage } from './ui-page.js'
@@ -57,7 +57,7 @@ export class UiServer {
       dryRun: this.engine.isDryRun,
       dryRunForcedByEnv: this.engine.settings.dryRunForcedByEnv,
       settings: this.engine.settings.data,
-      datasetCatalog: DATASETS.map(d => ({ id: d.id, label: d.label, plan: d.plan })),
+      datasetCatalog: ALL_DATASETS().map(d => ({ id: d.id, label: d.label, plan: d.plan })),
       datasetStatus: this.engine.datasetStatus,
       allocationsLoaded: this.engine.allocations ? this.engine.allocations.byPolitician.size : null,
       accountId: this.engine.broker.accountId,
@@ -118,6 +118,33 @@ export class UiServer {
           return send(200, { ok: true, settings: data })
         })
         .catch(e => send(400, { error: e.message }))
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/manual-order') {
+      return this.#readJson(req)
+        .then(b => this.engine.queueManualOrder(b))
+        .then(o => send(200, { ok: true, order: o }))
+        .catch(e => send(400, { error: e.message }))
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/performance') {
+      return this.#readJson(req)
+        .then(b => this.engine.performance({ groupBy: b.groupBy === 'dataset' ? 'dataset' : 'actor' }))
+        .then(r => send(200, r))
+        .catch(e => send(500, { error: e.message }))
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/browse') {
+      return this.#readJson(req)
+        .then(async b => {
+          const { datasetById } = await import('./datasets.js')
+          const ds = datasetById(b.dataset)
+          if (!ds) throw new Error(`Unknown dataset "${b.dataset}"`)
+          const raw = await this.engine.quiver.fetchDataset(ds.path, b.ticker ? { ticker: b.ticker } : {})
+          return { dataset: ds.id, label: ds.label, rows: raw.slice(0, 100).map(r => ds.normalise(r)) }
+        })
+        .then(r => send(200, r))
+        .catch(e => send(400, { error: e.message, denied: /HTTP 40[13]/.test(e.message) }))
     }
 
     if (req.method === 'POST' && url.pathname === '/api/amend') {

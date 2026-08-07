@@ -40,7 +40,15 @@ export const DEFAULTS = {
   buckets: {},
 
   // datasetId -> enabled. Unknown ids are ignored.
-  datasets: { congresstrading: true }
+  datasets: { congresstrading: true },
+
+  /**
+   * Per-source capital and destination account.
+   * Key is "dataset:<id>" or "actor:<name>"; the more specific actor entry wins.
+   * capitalUsd here replaces the global sizing.capitalUsd for that source, so
+   * mirror sizing can allocate different amounts to different people.
+   */
+  allocations: {}
 }
 
 function deepMerge (base, patch) {
@@ -92,4 +100,17 @@ export class Settings {
   }
 
   get dryRun () { return this.data.dryRun !== false }
+
+  /** Resolve capital and account for a signal, most specific first. */
+  allocationFor ({ actor, dataset } = {}) {
+    const a = this.data.allocations ?? {}
+    const byActor = actor ? a[`actor:${String(actor).toLowerCase()}`] : null
+    const byDataset = dataset ? a[`dataset:${dataset}`] : null
+    const chosen = byActor ?? byDataset ?? null
+    return {
+      capitalUsd: chosen?.capitalUsd ?? this.data.sizing.capitalUsd,
+      accountId: chosen?.accountId ?? this.data.routing?.defaultAccountId ?? null,
+      source: byActor ? 'actor' : byDataset ? 'dataset' : 'default'
+    }
+  }
 }

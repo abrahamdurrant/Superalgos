@@ -1,6 +1,32 @@
 import { log } from './log.js'
 
 /**
+ * SEC Form 4 transaction codes. Only P and S are open-market decisions - the
+ * rest are compensation mechanics and following them would be noise:
+ *   A grant/award   M option exercise   F tax withholding
+ *   G gift          X option exercise   D disposition to issuer
+ * See https://www.sec.gov/files/forms-3-4-5.pdf
+ */
+export const MEANINGFUL_FORM4_CODES = new Set(['P', 'S'])
+
+export function form4Side (r) {
+  const code = String(r.TransactionCode ?? '').trim().toUpperCase()
+  if (code === 'P') return 'Purchase'
+  if (code === 'S') return 'Sale'
+  // Anything else is not a discretionary open-market trade. Surface the code so
+  // the evaluator skips it with a readable reason instead of guessing a side.
+  return `Form4:${code || 'unknown'}`
+}
+
+export function insiderRole (r) {
+  if (r.isOfficer && r.officerTitle) return r.officerTitle
+  if (r.isOfficer) return 'Officer'
+  if (r.isDirector) return 'Director'
+  if (r.isTenPercentOwner) return '10% owner'
+  return 'Insider'
+}
+
+/**
  * Every Quiver dataset that can generate a trade signal, normalised to one shape.
  *
  * Each source reports different field names for the same ideas, so `normalise`
@@ -75,20 +101,123 @@ export const DATASETS = [
     path: '/beta/live/insiders',
     plan: 'Trader',           // NOT included in Hobbyist
     actorKind: 'insider',
+    // Verified against Quiver's OpenAPI schema for /beta/live/insiders.
+    normalise: r => {
+      const shares = Number(r.Shares) || 0
+      const price = Number(r.PricePerShare) || 0
+      return {
+        actor: r.Name,
+        // Form 4 has no stable person id, so identity is the name.
+        actorId: null,
+        party: null,
+        chamber: insiderRole(r),
+        ticker: r.Ticker,
+        tickerType: 'ST',
+        transaction: form4Side(r),
+        // Quiver reports shares and price, not a dollar value; compute it.
+        amount: shares && price ? Math.round(shares * price) : null,
+        range: shares && price ? `$${Math.round(shares * price).toLocaleString()}` : (shares ? `${shares} shares` : null),
+        transactionDate: r.Date,
+        reportDate: r.fileDate ?? r.Date,
+        // Extra context worth keeping for display and filtering.
+        insider: {
+          transactionCode: r.TransactionCode,
+          acquiredDisposed: r.AcquiredDisposedCode,
+          shares,
+          pricePerShare: price,
+          sharesOwnedFollowing: Number(r.SharesOwnedFollowing) || null,
+          officerTitle: r.officerTitle || null,
+          isDirector: Boolean(r.isDirector),
+          isOfficer: Boolean(r.isOfficer),
+          isTenPercentOwner: Boolean(r.isTenPercentOwner),
+          ownership: r.directOrIndirectOwnership
+        }
+      }
+    }
+  }
+]
+
+/**
+ * Institutional 13F filings. sec13f has a published schema; sec13fchanges
+ * documents only its parameters, so its normaliser reads through several
+ * plausible key spellings and leaves fields null rather than inventing them.
+ * Use `peek` to see the real shape before relying on it.
+ */
+export const INSTITUTIONAL_DATASETS = [
+  {
+    id: 'sec13f',
+    label: 'Hedge fund holdings (13F)',
+    path: '/beta/live/sec13f',
+    plan: 'Trader',
+    actorKind: 'fund',
+    // Verified against the published schema.
     normalise: r => ({
-      actor: r.Name ?? r.Insider,
-      actorId: r.CIK ?? r.Name,
-      party: null,
-      chamber: r.Title ?? 'Insider',
+      actor: r.Fund ?? r.Name,
+      actorId: null,
       ticker: r.Ticker,
       tickerType: 'ST',
-      // Form 4 codes: P = open-market purchase, S = sale.
-      transaction: /^p/i.test(String(r.AcquiredDisposedCode ?? r.TransactionCode ?? '')) ? 'Purchase'
-        : /^[sd]/i.test(String(r.AcquiredDisposedCode ?? r.TransactionCode ?? '')) ? 'Sale' : r.TransactionCode,
-      amount: r.Value ?? r.SharesTraded,
-      range: r.Value ? `$${r.Value}` : null,
-      transactionDate: r.Date ?? r.TransactionDate,
-      reportDate: r.FilingDate ?? r.Date
+      // A holdings snapshot is a position, not a transaction.
+      transaction: 'Holding',
+      amount: Number(r.Value) || null,
+      shares: Number(r.Shares) || null,
+      range: r.Value ? `$${Number(r.Value).toLocaleString()}` : null,
+      transactionDate: r.ReportPeriod,
+      reportDate: r.Date,
+      chamber: r['Put/Call'] ? `${r['Put/Call']} option` : (r.Class || 'Holding')
+    })
+  },
+  {
+    id: 'sec13fchanges',
+    label: 'Hedge fund position changes (13F)',
+    path: '/beta/live/sec13fchanges',
+    plan: 'Trader',
+    actorKind: 'fund',
+    // No published response schema - read tolerantly, invent nothing.
+    normalise: r => {
+      const change = Number(r.Change ?? r.ChangeInShares ?? r.SharesChange ?? r.Delta)
+      const pct = Number(r.PctChange ?? r.PercentChange ?? r['Change%'])
+      const side = Number.isFinite(change)
+        ? (change > 0 ? 'Purchase' : change < 0 ? 'Sale' : 'Unchanged')
+        : (Number.isFinite(pct) ? (pct > 0 ? 'Purchase' : pct < 0 ? 'Sale' : 'Unchanged') : 'Unknown')
+      return {
+        actor: r.Fund ?? r.Name ?? r.Owner,
+        actorId: null,
+        ticker: r.Ticker,
+        tickerType: 'ST',
+        transaction: side,
+        amount: Number(r.Value ?? r.ValueChange) || null,
+        shares: Number.isFinite(change) ? change : null,
+        range: Number.isFinite(pct) ? `${pct > 0 ? '+' : ''}${pct}%` : (Number.isFinite(change) ? `${change > 0 ? '+' : ''}${change} shares` : null),
+        transactionDate: r.ReportPeriod ?? r.Period ?? r.Date,
+        reportDate: r.Date ?? r.FilingDate,
+        chamber: 'Fund'
+      }
+    }
+  }
+]
+
+/** Included in Hobbyist. Bulk-only - there is no live variant. */
+export const SPECIAL_DATASETS = [
+  {
+    id: 'trumpstocktrades',
+    label: 'Donald Trump stock trades',
+    path: '/beta/bulk/trumpstocktrades',
+    plan: 'Hobbyist',
+    actorKind: 'politician',
+    // Verified against the published schema.
+    normalise: r => ({
+      actor: 'Donald Trump',
+      actorId: 'TRUMP',
+      party: 'Republican',
+      chamber: 'Executive',
+      ticker: r.Ticker,
+      tickerType: 'ST',
+      transaction: r.Transaction,
+      amount: r.Amount,
+      range: r.Amount,
+      company: r.Company,
+      transactionDate: r.Traded,
+      reportDate: r.Filed
     })
   }
 ]
@@ -100,7 +229,8 @@ export const CONTEXT_DATASETS = [
   { id: 'lobbying', label: 'Corporate lobbying', path: '/beta/live/lobbying', plan: 'Hobbyist' }
 ]
 
-export const datasetById = id => DATASETS.find(d => d.id === id) ?? CONTEXT_DATASETS.find(d => d.id === id)
+export const ALL_DATASETS = () => [...DATASETS, ...SPECIAL_DATASETS, ...INSTITUTIONAL_DATASETS, ...CONTEXT_DATASETS]
+export const datasetById = id => ALL_DATASETS().find(d => d.id === id)
 
 /**
  * Fetch every enabled dataset, normalise the rows, and report per-dataset status.
@@ -110,7 +240,7 @@ export const datasetById = id => DATASETS.find(d => d.id === id) ?? CONTEXT_DATA
 export async function fetchEnabled (quiver, enabledMap) {
   const rows = []
   const status = []
-  for (const ds of DATASETS) {
+  for (const ds of [...DATASETS, ...SPECIAL_DATASETS, ...INSTITUTIONAL_DATASETS]) {
     if (!enabledMap?.[ds.id]) continue
     try {
       const raw = await quiver.fetchDataset(ds.path)

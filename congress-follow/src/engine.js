@@ -54,7 +54,12 @@ export class Engine {
       return { notionalUsd: signal.notionalUsd, sizeSource: sizing.mode, sizeNote: null }
     }
     const bucket = signal.bucket ? this.settings.data.buckets?.[signal.bucket] : null
-    const capitalUsd = bucket?.capitalUsd ?? sizing.capitalUsd
+    const alloc = this.settings.allocationFor({
+      actor: signal.trade && f.actor(signal.trade),
+      dataset: signal.dataset
+    })
+    // Bucket capital wins if set, then any per-source allocation, then global.
+    const capitalUsd = bucket?.capitalUsd ?? alloc.capitalUsd
     const r = mirrorSize({
       actor: signal.trade && f.actor(signal.trade),
       ticker: signal.ticker,
@@ -109,6 +114,25 @@ export class Engine {
   }
 
   /**
+   * Performance by source, from whatever return data the API actually carries.
+   * See src/performance.js for exactly what these numbers are and are not.
+   */
+  async performance ({ groupBy = 'actor' } = {}) {
+    const { rows, status } = await fetchEnabled(this.quiver, { ...this.settings.data.datasets })
+    this.datasetStatus = status
+    const { analyse } = await import('./performance.js')
+    const result = analyse(rows, { groupBy })
+    return {
+      ...result,
+      groupBy,
+      datasets: status,
+      // Which sources can be measured at all, so the UI never implies otherwise.
+      returnsAvailableFor: ['congresstrading'],
+      allocations: this.settings.data.allocations ?? {}
+    }
+  }
+
+  /**
    * Fetch new disclosures and queue anything actionable as a PENDING order.
    * Nothing is sent to the broker here - approval is a separate, explicit step.
    */
@@ -148,7 +172,7 @@ export class Engine {
           bucket: signal.bucket,
           accountId: signal.accountId
             ?? (signal.bucket ? this.settings.data.routing?.byBucket?.[signal.bucket] : null)
-            ?? this.settings.data.routing?.defaultAccountId
+            ?? this.settings.allocationFor({ actor: f.actor(signal.trade), dataset: signal.dataset }).accountId
             ?? null,
           politician: f.actor(signal.trade),
           bioGuideId: f.actorId(signal.trade),
@@ -367,6 +391,46 @@ export class Engine {
   }
 
   /** Refresh the broker-side status of everything we have submitted. */
+  /**
+   * Queue an order for a ticker directly, bypassing the watchlist.
+   *
+   * This is how a row seen while browsing any dataset becomes a trade: pick the
+   * ticker, the dollar amount and the account. It still lands as PENDING and
+   * still passes every guardrail at approval, so it is not a back door around
+   * the safety model - only around signal generation.
+   */
+  queueManualOrder ({ ticker, notionalUsd, accountId = null, bucket = null, side = 'BUY', note = null, source = 'manual' } = {}) {
+    const sym = String(ticker ?? '').trim().toUpperCase()
+    if (!/^[A-Z][A-Z.\-]{0,9}$/.test(sym)) throw new Error(`"${ticker}" is not a plausible ticker symbol.`)
+    if (!['BUY', 'SELL'].includes(side)) throw new Error('Side must be BUY or SELL.')
+    const amount = side === 'BUY' ? Number(notionalUsd) : null
+    if (side === 'BUY' && !(Number.isFinite(amount) && amount > 0)) {
+      throw new Error('A BUY needs a positive dollar amount.')
+    }
+    return this.store.withLock(store => {
+      const order = {
+        id: randomUUID(),
+        status: 'PENDING',
+        createdAt: new Date().toISOString(),
+        tradeKey: null,          // manual orders are not tied to a disclosure
+        side,
+        ticker: sym,
+        notionalUsd: amount,
+        sizeSource: 'manual',
+        sizeNote: note,
+        sellMode: side === 'SELL' ? 'full' : null,
+        dataset: source,
+        bucket,
+        accountId: accountId ?? this.settings.data.routing?.defaultAccountId ?? null,
+        politician: null,
+        manual: true,
+        source
+      }
+      store.putOrder(order)
+      return order
+    })
+  }
+
   /** Adjust a pending order before approval: size, destination account, bucket. */
   amend (orderId, { sizeOverrideUsd, accountId, bucket } = {}) {
     return this.store.withLock(store => {

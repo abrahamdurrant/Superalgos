@@ -208,6 +208,104 @@ async function main () {
       break
     }
 
+    case 'buy':
+    case 'sell': {
+      const engine = new Engine()
+      const ticker = args[0]
+      const amount = args[1]
+      if (!ticker) throw new Error(`Usage: congress-follow ${command} <TICKER> ${command === 'buy' ? '<amount>' : ''} [--account <id>]`)
+      const aIdx = rest.indexOf('--account')
+      const order = engine.queueManualOrder({
+        ticker,
+        notionalUsd: amount,
+        side: command.toUpperCase(),
+        accountId: aIdx !== -1 ? rest[aIdx + 1] : null,
+        note: 'entered manually'
+      })
+      console.log(`Queued ${order.side} ${order.ticker}` + (order.notionalUsd ? ` for ${usd(order.notionalUsd)}` : '') +
+        (order.accountId ? ` in ${order.accountId}` : ' in the default account'))
+      console.log(`\nIt is PENDING and passes the guardrails at approval:`)
+      console.log(`  congress-follow approve ${order.id.slice(0, 8)}`)
+      break
+    }
+
+    case 'performance': {
+      const engine = new Engine()
+      const groupBy = flags.has('--by-dataset') ? 'dataset' : 'actor'
+      const p = await engine.performance({ groupBy })
+      const pct = v => v === null || v === undefined ? '    —' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%'
+
+      console.log(`Average return per disclosed trade, by ${groupBy}.`)
+      console.log('This is NOT a portfolio return - see the caveats below.\n')
+      console.log('  ' + 'Source'.padEnd(26) + 'Trades  ' + ['24h', '30d', '365d', 'all'].map(h => h.padStart(8)).join('') + '   vs SPY (all)')
+      for (const s of p.sources.slice(0, 25)) {
+        if (!s.measurable) {
+          console.log('  ' + String(s.key).slice(0, 25).padEnd(26) + String(s.windows.all.trades).padStart(6) + '   (no return data for this source)')
+          continue
+        }
+        console.log('  ' + String(s.key).slice(0, 25).padEnd(26) + String(s.windows.all.trades).padStart(6) + '  ' +
+          ['day', 'month', 'year', 'all'].map(w => pct(s.windows[w].avgReturnPct).padStart(8)).join('') +
+          '   ' + pct(s.windows.all.avgExcessVsSpyPct))
+      }
+      console.log('\nCaveats:')
+      console.log('  - Return data exists only for congress trading. Senate, House, insiders')
+      console.log('    and 13F carry none, so they show as unmeasurable rather than 0%.')
+      console.log('  - These are per-trade averages, unweighted by position size.')
+      console.log('  - They measure the politician\'s entry, not yours - you buy up to 45 days later.')
+      console.log('  - No price history is available, so a true daily/monthly/annual portfolio')
+      console.log('    return cannot be computed from this API.')
+      break
+    }
+
+    case 'peek': {
+      const { datasetById, ALL_DATASETS } = await import('../src/datasets.js')
+      const which = args[0]
+      if (!which) {
+        console.log('Usage: congress-follow peek <dataset> [--raw] [--ticker SYM]\n\nDatasets:')
+        for (const d of ALL_DATASETS()) console.log(`  ${d.id.padEnd(18)} ${d.label.padEnd(36)} ${d.plan}`)
+        break
+      }
+      const ds = datasetById(which)
+      if (!ds) throw new Error(`Unknown dataset "${which}". Run \`peek\` with no argument to list them.`)
+
+      const quiver = new QuiverClient()
+      const params = {}
+      const tIdx = rest.indexOf('--ticker')
+      if (tIdx !== -1 && rest[tIdx + 1]) params.ticker = rest[tIdx + 1]
+
+      let rows
+      try {
+        rows = await quiver.fetchDataset(ds.path, params)
+      } catch (err) {
+        if (/HTTP 40[13]/.test(err.message)) {
+          console.log(`${ds.label} is not included in your plan (needs ${ds.plan}).`)
+          console.log('Congress/Senate/House trading are on Hobbyist; insiders and 13F need Trader ($75/mo).')
+          console.log('See https://api.quiverquant.com/pricing/')
+          process.exitCode = 1
+          break
+        }
+        throw err
+      }
+
+      console.log(`${ds.label} — ${rows.length} row(s) from ${ds.path}\n`)
+      if (rows.length === 0) { console.log('(empty)'); break }
+
+      // The real field names matter: two of these datasets publish no response schema.
+      console.log('Fields present: ' + Object.keys(rows[0]).join(', ') + '\n')
+      if (flags.has('--raw')) {
+        console.log(JSON.stringify(rows.slice(0, 3), null, 2))
+        break
+      }
+      for (const r of rows.slice(0, 15)) {
+        const n = ds.normalise(r)
+        const size = n.amount ? '$' + Number(n.amount).toLocaleString() : (n.range ?? '—')
+        console.log(`  ${String(n.transaction).padEnd(10)} ${String(n.ticker ?? '—').padEnd(7)} ${size.padEnd(16)} ${String(n.actor ?? '—').slice(0, 28).padEnd(30)} ${n.chamber ?? ''}`)
+        console.log(`             traded ${n.transactionDate ?? '?'} · filed ${n.reportDate ?? '?'}`)
+      }
+      if (rows.length > 15) console.log(`\n  … ${rows.length - 15} more. Add --raw to see full records.`)
+      break
+    }
+
     case 'quiver-check': {
       const quiver = new QuiverClient()
       const { describeSecrets } = await import('../src/secrets.js')
@@ -280,6 +378,10 @@ Usage:
   congress-follow sync                 Refresh status of submitted orders
   congress-follow status               Show Public accounts and open positions
   congress-follow politicians <query>  Look up BioGuide IDs for your watchlist
+  congress-follow buy <TICKER> <amt>   Queue a trade directly (--account <id>)
+  congress-follow sell <TICKER>        Queue a full-position sell
+  congress-follow performance          Per-source return stats (--by-dataset to group by feed)
+  congress-follow peek <dataset>       Inspect a dataset's real rows (--raw for full records)
   congress-follow quiver-check         Probe each Quiver endpoint and diagnose a 401
 
 Secrets:

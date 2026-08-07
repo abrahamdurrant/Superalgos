@@ -85,9 +85,12 @@ input[type=checkbox]{width:auto;margin-right:7px}
       <button data-tab="pos" aria-selected="true">Positions</button>
       <button data-tab="flt" aria-selected="false">Filtered out</button>
       <button data-tab="hist" aria-selected="false">History</button>
+      <button data-tab="perf" aria-selected="false">Performance</button>
+      <button data-tab="expl" aria-selected="false">Explore</button>
       <button data-tab="cfg" aria-selected="false">Following</button>
     </div>
-    <div id="pos"></div><div id="flt" hidden></div><div id="hist" hidden></div><div id="cfg" hidden></div>
+    <div id="pos"></div><div id="flt" hidden></div><div id="perf" hidden></div>
+    <div id="expl" hidden></div><div id="hist" hidden></div><div id="cfg" hidden></div>
   </section>
 </main>
 <dialog id="sdlg"><div class="dlg">
@@ -318,9 +321,96 @@ $('prev').onclick=async()=>{
       '</tbody></table></div>':'<div class="empty">Nothing filtered.</div>');
   }catch(e){$('flt').innerHTML='<div class="err">'+esc(e.message)+'</div>'}};
 
+const pct=v=>v==null?'—':(v>=0?'+':'')+v.toFixed(1)+'%';
+
+async function loadPerf(){
+  $('perf').innerHTML='<div class="empty">Loading…</div>';
+  try{
+    const p=await api('/api/performance',{method:'POST',body:JSON.stringify({groupBy:'actor'})});
+    const rows=p.sources.slice(0,40).map(s=>{
+      if(!s.measurable) return '<tr><td>'+esc(s.key)+'</td><td>'+s.windows.all.trades+
+        '</td><td colspan="5" class="sub">no return data for this source</td></tr>';
+      return '<tr><td>'+esc(s.key)+'<div class="sub">'+esc(s.dataset||'')+'</div></td><td>'+s.windows.all.trades+'</td>'+
+        ['day','month','year','all'].map(w=>'<td>'+pct(s.windows[w].avgReturnPct)+'</td>').join('')+
+        '<td>'+pct(s.windows.all.avgExcessVsSpyPct)+'</td>'+
+        '<td><input class="alloc mini" type="number" min="0" step="100" placeholder="capital" data-key="actor:'+esc(String(s.key).toLowerCase())+'" '+
+          'value="'+esc(p.allocations['actor:'+String(s.key).toLowerCase()]?.capitalUsd??'')+'">'+
+          '<select class="allocacct mini" data-key="actor:'+esc(String(s.key).toLowerCase())+'">'+
+          accountOptions(p.allocations['actor:'+String(s.key).toLowerCase()]?.accountId)+'</select></td></tr>';
+    }).join('');
+    $('perf').innerHTML=
+      '<div class="err" style="background:var(--warnbg);color:var(--warn)"><b>Read this before using these numbers.</b><br>'+
+      'These are <b>average returns per disclosed trade</b>, not portfolio returns. Quiver publishes a price change '+
+      'and excess-vs-SPY per congressional trade; no endpoint provides a price history, so a true daily/monthly/annual '+
+      'compounded return cannot be computed. They are unweighted by position size, and they measure the entry made by the filer, not yours '+
+      '— you buy up to 45 days later. Return data exists only for congress trading.</div>'+
+      '<div class="wrap"><table><thead><tr><th>Source</th><th>Trades</th><th>24h</th><th>30d</th><th>365d</th><th>All</th><th>vs SPY</th><th>Capital / account</th></tr></thead><tbody>'+
+      rows+'</tbody></table></div>';
+    document.querySelectorAll('.alloc').forEach(i=>i.onchange=()=>saveAlloc(i.dataset.key,{capitalUsd:i.value?Number(i.value):null}));
+    document.querySelectorAll('.allocacct').forEach(sl=>sl.onchange=()=>saveAlloc(sl.dataset.key,{accountId:sl.value||null}));
+  }catch(e){$('perf').innerHTML='<div class="err">'+esc(e.message)+'</div>'}
+}
+
+async function saveAlloc(key,patch){
+  const cur=STATE.settings.allocations?.[key]??{};
+  const next={...cur,...patch};
+  if(next.capitalUsd==null&&next.accountId==null){
+    await api('/api/settings',{method:'POST',body:JSON.stringify({allocations:{[key]:null}})});
+  }else{
+    await api('/api/settings',{method:'POST',body:JSON.stringify({allocations:{[key]:next}})});
+  }
+  await load();
+}
+
+async function loadExplore(dsId){
+  const cat=STATE.datasetCatalog;
+  const sel='<select id="expl_ds">'+cat.map(d=>'<option value="'+esc(d.id)+'"'+(d.id===dsId?' selected':'')+'>'+
+    esc(d.label)+' ('+esc(d.plan)+')</option>').join('')+'</select>';
+  $('expl').innerHTML='<div class="fld" style="padding:12px 15px">'+sel+
+    ' <input id="expl_tk" class="mini" style="width:110px" placeholder="ticker (optional)"> '+
+    '<button id="expl_go" class="mini primary">Load</button></div><div id="expl_rows"></div>';
+  $('expl_ds').onchange=()=>loadExplore($('expl_ds').value);
+  $('expl_go').onclick=async()=>{
+    const id=$('expl_ds').value, tk=$('expl_tk').value.trim();
+    $('expl_rows').innerHTML='<div class="empty">Loading…</div>';
+    try{
+      const r=await api('/api/browse',{method:'POST',body:JSON.stringify({dataset:id,ticker:tk||undefined})});
+      $('expl_rows').innerHTML=r.rows.length?'<div class="wrap"><table><thead><tr><th>Trade</th><th>Size</th><th>Dates</th><th>Buy</th></tr></thead><tbody>'+
+        r.rows.map((n,i)=>'<tr><td><span class="side '+(String(n.transaction).includes("Purchase")?"BUY":"SELL")+'">'+esc(n.transaction)+'</span> '+
+          '<span class="tick">'+esc(n.ticker||'—')+'</span><div class="sub">'+esc(n.actor||'')+(n.chamber?' · '+esc(n.chamber):'')+'</div></td>'+
+          '<td>'+esc(n.range||(n.amount?usd(n.amount):'—'))+'</td>'+
+          '<td class="sub">traded '+esc(n.transactionDate||'?')+'<br>filed '+esc(n.reportDate||'?')+'</td>'+
+          '<td>'+(n.ticker?'<input class="mini" style="width:80px" id="amt_'+i+'" type="number" min="1" placeholder="$"> '+
+            '<select class="mini" id="acc_'+i+'">'+accountOptions(null)+'</select> '+
+            '<button class="mini buyrow" data-i="'+i+'" data-t="'+esc(n.ticker)+'" data-s="'+esc(id)+'">Queue</button>':'')+'</td></tr>').join('')+
+        '</tbody></table></div>':'<div class="empty">No rows.</div>';
+      document.querySelectorAll('.buyrow').forEach(b=>b.onclick=()=>queueBuy(b.dataset.t,$('amt_'+b.dataset.i).value,$('acc_'+b.dataset.i).value,b.dataset.s));
+    }catch(e){
+      $('expl_rows').innerHTML='<div class="err">'+esc(e.message)+
+        (e.message.includes('40')?'<br><span class="sub">Insiders and 13F need the Quiver Trader plan; congress, Trump and lobbying are on Hobbyist.</span>':'')+'</div>';
+    }
+  };
+  $('expl_go').click();
+}
+
+async function queueBuy(ticker,amount,accountId,source){
+  if(!amount||Number(amount)<=0){await confirmDialog('Amount needed','<p class="sub">Enter a dollar amount first.</p>','Close');return}
+  if(!await confirmDialog('Queue '+ticker,
+    '<p>Queue a <b>BUY</b> of <b>'+esc(ticker)+'</b> for '+usd(Number(amount))+
+    (accountId?' in '+esc(accountId):' in the default account')+'?</p>'+
+    '<p class="sub">It lands as pending and still passes every guardrail when you approve it.</p>','Queue'))return;
+  try{
+    await api('/api/manual-order',{method:'POST',body:JSON.stringify({ticker,notionalUsd:Number(amount),accountId:accountId||null,source})});
+    await load();
+    await confirmDialog('Queued','<p class="sub">It is in the approval queue at the top of the page.</p>','Close');
+  }catch(e){await confirmDialog('Could not queue','<p>'+esc(e.message)+'</p>','Close')}
+}
+
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+  if(b.dataset.tab==='perf')loadPerf();
+  if(b.dataset.tab==='expl')loadExplore(STATE.datasetCatalog[0]?.id);
   document.querySelectorAll('.tabs button').forEach(x=>x.setAttribute('aria-selected',x===b));
-  ['pos','flt','hist','cfg'].forEach(id=>$(id).hidden=(id!==b.dataset.tab));});
+  ['pos','flt','perf','expl','hist','cfg'].forEach(id=>$(id).hidden=(id!==b.dataset.tab));});
 
 load().catch(e=>{document.body.innerHTML='<main><section><div class="err">'+esc(e.message)+'</div></section></main>'});
 setInterval(()=>load().catch(()=>{}),30000);

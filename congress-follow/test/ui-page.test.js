@@ -91,6 +91,14 @@ test('the page script contains no raw newline inside a JS string literal', () =>
   }
 })
 
+test('no bare apostrophe survives inside a single-quoted string', () => {
+  // Regression: `politician\'s` inside the template literal collapsed to a bare
+  // quote in the emitted JS and broke the page. Escaping is easy to get wrong
+  // here, so the guard is structural rather than per-instance.
+  const js = extractJs(renderPage('tok'))
+  assert.doesNotThrow(() => new Function(js), 'apostrophes must be escaped or avoided')
+})
+
 test('the page runs against a DOM and loads state without throwing', async () => {
   const { calls, errors } = runPage(STATE)
   await new Promise(r => setImmediate(r))
