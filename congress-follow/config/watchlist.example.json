@@ -1,0 +1,32 @@
+{
+  "$comment": "Copy to watchlist.json and edit. Match on bioGuideId when you can - names are inconsistent across filings. Use `congress-follow politicians <name>` to look up IDs.",
+  "follow": [
+    { "bioGuideId": "P000197", "name": "Nancy Pelosi", "weight": 1.0, "enabled": true },
+    { "bioGuideId": "T000193", "name": "Tommy Tuberville", "weight": 0.5, "enabled": false }
+  ],
+  "rules": {
+    "sides": ["BUY", "SELL"],
+    "tickerAllowlist": [],
+    "tickerBlocklist": [],
+    "minDisclosureLagDays": 0,
+    "maxDisclosureLagDays": 60,
+    "allowedTickerTypes": ["CS", "ST"]
+  },
+  "sizing": {
+    "mode": "fixed",
+    "notionalUsd": 250,
+    "tiers": [
+      { "minReportedAmount": 1001, "notionalUsd": 150 },
+      { "minReportedAmount": 15001, "notionalUsd": 300 },
+      { "minReportedAmount": 50001, "notionalUsd": 500 },
+      { "minReportedAmount": 250001, "notionalUsd": 1000 }
+    ],
+    "sellMode": "full"
+  },
+  "guardrails": {
+    "maxNotionalPerTrade": 1000,
+    "maxOrdersPerDay": 10,
+    "maxOpenPositions": 25,
+    "requireHeldPositionToSell": true
+  }
+}

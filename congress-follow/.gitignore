@@ -1,0 +1,4 @@
+.env
+data/
+config/watchlist.json
+node_modules/
