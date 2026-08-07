@@ -26,7 +26,11 @@ export const DEFAULTS = {
     capitalUsd: 10000,     // the base that allocation percentages apply to
     minNotionalUsd: 25,    // below this a mirrored slice is not worth the spread
     maxNotionalUsd: 1000,
-    sellMode: 'full'
+    sellMode: 'full',
+    // With every dataset on, the feeds together return ~50k rows. Only the
+    // newest can produce a new signal, so each dataset is capped per poll.
+    // Truncation is always logged and reported, never silent.
+    maxRowsPerDataset: 2500
   },
 
   routing: {

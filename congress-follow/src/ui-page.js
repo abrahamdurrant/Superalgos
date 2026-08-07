@@ -230,11 +230,13 @@ function settingsForm(s){
   const z=s.settings, ds=s.datasetCatalog.map(d=>{
     const st=(s.datasetStatus||[]).find(x=>x.id===d.id);
     const on=z.datasets?.[d.id]===true;
-    return '<div class="ds"><input type="checkbox" id="ds_'+d.id+'"'+(on?' checked':'')+'>'+
+    return '<div class="ds"><input type="checkbox" id="ds_'+d.id+'"'+(on?' checked':'')+
+      (d.signalSource?'':' disabled')+'>'+
       '<label for="ds_'+d.id+'" style="margin:0;font-weight:500">'+esc(d.label)+'</label>'+
       '<span class="pill">'+esc(d.plan)+'</span>'+
+      (d.signalSource?'':'<span class="sub">explore only — company data, nobody to follow</span>')+
       (st&&!st.ok?'<span class="bad">'+esc(st.error)+'</span>':'')+
-      (st&&st.ok?'<span class="sub">'+st.count+' rows</span>':'')+'</div>';
+      (st&&st.ok?'<span class="sub">'+st.count+' rows'+(st.truncated?' of '+st.total+' (newest kept)':'')+'</span>':'')+'</div>';
   }).join('');
   return '<div class="fld"><label>Sizing mode</label><select id="s_mode">'+
       ['mirror','fixed','tiered'].map(m=>'<option value="'+m+'"'+(z.sizing.mode===m?' selected':'')+'>'+
@@ -262,7 +264,7 @@ function settingsForm(s){
 async function openSettings(){
   $('sbody').innerHTML=settingsForm(STATE);
   $('ss').onclick=async()=>{
-    const datasets={};STATE.datasetCatalog.forEach(d=>{datasets[d.id]=$('ds_'+d.id).checked});
+    const datasets={};STATE.datasetCatalog.forEach(d=>{if(d.signalSource)datasets[d.id]=$('ds_'+d.id).checked});
     const goingLive=$('s_dry').checked&&STATE.dryRun;
     if(goingLive){
       $('sdlg').close();

@@ -377,7 +377,7 @@ async function main () {
         if (flags.has('--enable-available')) {
           const settings = new Settings()
           const patch = {}
-          for (const r of results) patch[r.id] = r.ok
+          for (const r of results) { if (r.signalSource !== false) patch[r.id] = r.ok }
           settings.update({ datasets: patch })
           console.log(`Enabled: ${available.map(r => r.id).join(', ')}`)
           const off = results.filter(r => !r.ok)

@@ -551,3 +551,60 @@ test('a probe failure that is not a plan issue is reported as itself', async () 
   assert.equal(r[0].denied, false)
   assert.match(r[0].error, /socket hang up/)
 })
+
+// ---- volume control and explore-only datasets ----
+test('a huge feed is capped to the newest rows, and the drop is reported', async () => {
+  const { fetchEnabled } = await import('../src/datasets.js')
+  const many = Array.from({ length: 20000 }, (_, i) => ({
+    Representative: 'X', Ticker: 'T', Transaction: 'Purchase',
+    TransactionDate: `2026-${String((i % 12) + 1).padStart(2, '0')}-01`, ReportDate: '2026-08-01', Amount: '1'
+  }))
+  const quiver = { async fetchDataset (p) { return p.includes('congresstrading') ? many : [] } }
+  const { rows, status } = await fetchEnabled(quiver, { congresstrading: true }, { maxRowsPerDataset: 100 })
+  assert.equal(rows.length, 100)
+  const st = status.find(s => s.id === 'congresstrading')
+  assert.equal(st.total, 20000)
+  assert.equal(st.truncated, 19900, 'the drop must be reported, not silent')
+  // The kept rows must be the newest, or a new disclosure could be missed.
+  assert.ok(rows.every(r => r.transactionDate >= '2026-12-01'))
+})
+
+test('an uncapped fetch keeps everything', async () => {
+  const { fetchEnabled } = await import('../src/datasets.js')
+  const quiver = { async fetchDataset () { return Array.from({ length: 500 }, () => ({ Ticker: 'T', Transaction: 'Purchase' })) } }
+  const { rows, status } = await fetchEnabled(quiver, { congresstrading: true })
+  assert.equal(rows.length, 500)
+  assert.equal(status[0].truncated, 0)
+})
+
+test('company-level datasets are never polled for signals', async () => {
+  const { fetchEnabled, SIGNAL_DATASETS } = await import('../src/datasets.js')
+  const ids = SIGNAL_DATASETS().map(d => d.id)
+  assert.ok(!ids.includes('govcontractsall'), 'no person to follow in a contract award')
+  assert.ok(!ids.includes('lobbying'))
+  assert.ok(ids.includes('congresstrading'))
+
+  let touched = []
+  const quiver = { async fetchDataset (p) { touched.push(p); return [] } }
+  await fetchEnabled(quiver, { congresstrading: true, govcontractsall: true, lobbying: true })
+  assert.ok(!touched.some(p => /govcontracts|lobbying/.test(p)), 'enabling them must not cause a fetch')
+})
+
+test('explore-only datasets are still browsable', async () => {
+  const { datasetById } = await import('../src/datasets.js')
+  const gov = datasetById('govcontractsall')
+  assert.ok(gov, 'must still be reachable for browsing')
+  assert.equal(gov.signalSource, false)
+  const n = gov.normalise({ Company: 'Acme', Ticker: 'ACME', Amount: 5000000, Date: '2026-08-01', Agency: 'DoD' })
+  assert.equal(n.ticker, 'ACME')
+  assert.equal(n.transaction, 'Contract')
+})
+
+test('detect-available does not enable a dataset that cannot generate signals', async () => {
+  const { ALL_DATASETS } = await import('../src/datasets.js')
+  const results = ALL_DATASETS().map(d => ({ id: d.id, ok: true, signalSource: d.signalSource !== false }))
+  const patch = {}
+  for (const r of results) { if (r.signalSource !== false) patch[r.id] = r.ok }
+  assert.equal(patch.congresstrading, true)
+  assert.equal(patch.govcontractsall, undefined, 'explore-only stays out of the signal toggles')
+})

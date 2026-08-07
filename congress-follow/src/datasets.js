@@ -225,9 +225,33 @@ export const SPECIAL_DATASETS = [
 // Company-level datasets: real signals, but not somebody's trade, so they are
 // listed separately and are not wired into the follow-a-person flow.
 export const CONTEXT_DATASETS = [
-  { id: 'govcontractsall', label: 'Government contracts', path: '/beta/live/govcontractsall', plan: 'Hobbyist' },
-  { id: 'lobbying', label: 'Corporate lobbying', path: '/beta/live/lobbying', plan: 'Hobbyist' }
+  {
+    id: 'govcontractsall',
+    label: 'Government contracts',
+    path: '/beta/live/govcontractsall',
+    plan: 'Hobbyist',
+    // Company-level: there is no person or fund to follow, so these cannot
+    // generate a follow-based signal. Browsable, not pollable.
+    signalSource: false,
+    normalise: r => ({ actor: r.Company ?? r.Agency ?? null, ticker: r.Ticker, transaction: 'Contract',
+      amount: Number(r.Amount) || null, range: r.Amount ? `$${Number(r.Amount).toLocaleString()}` : null,
+      transactionDate: r.Date, reportDate: r.Date, chamber: r.Agency ?? 'Government' })
+  },
+  {
+    id: 'lobbying',
+    label: 'Corporate lobbying',
+    path: '/beta/live/lobbying',
+    plan: 'Hobbyist',
+    signalSource: false,
+    normalise: r => ({ actor: r.Client ?? r.Company ?? null, ticker: r.Ticker, transaction: 'Lobbying',
+      amount: Number(r.Amount) || null, range: r.Amount ? `$${Number(r.Amount).toLocaleString()}` : null,
+      transactionDate: r.Date, reportDate: r.Date, chamber: r.Issue ?? 'Lobbying' })
+  }
 ]
+
+/** Datasets that can actually produce a follow-based trade signal. */
+export const SIGNAL_DATASETS = () =>
+  [...DATASETS, ...SPECIAL_DATASETS, ...INSTITUTIONAL_DATASETS].filter(d => d.signalSource !== false)
 
 export const ALL_DATASETS = () => [...DATASETS, ...SPECIAL_DATASETS, ...INSTITUTIONAL_DATASETS, ...CONTEXT_DATASETS]
 export const datasetById = id => ALL_DATASETS().find(d => d.id === id)
@@ -237,16 +261,29 @@ export const datasetById = id => ALL_DATASETS().find(d => d.id === id)
  * A dataset the plan does not cover is reported as unavailable rather than
  * failing the whole poll - "everything available" has to mean exactly that.
  */
-export async function fetchEnabled (quiver, enabledMap) {
+export async function fetchEnabled (quiver, enabledMap, { maxRowsPerDataset = Infinity } = {}) {
   const rows = []
   const status = []
-  for (const ds of [...DATASETS, ...SPECIAL_DATASETS, ...INSTITUTIONAL_DATASETS]) {
+  for (const ds of SIGNAL_DATASETS()) {
     if (!enabledMap?.[ds.id]) continue
     try {
       const raw = await quiver.fetchDataset(ds.path)
-      const mapped = raw.map(r => ({ ...ds.normalise(r), dataset: ds.id, _raw: r }))
+      let mapped = raw.map(r => ({ ...ds.normalise(r), dataset: ds.id, _raw: r }))
+      const total = mapped.length
+
+      // Some feeds return tens of thousands of rows. Keep the newest, because
+      // only new disclosures can produce a new signal - and say how many were
+      // dropped rather than truncating silently.
+      let truncated = 0
+      if (mapped.length > maxRowsPerDataset) {
+        const { byNewest } = await import('./performance.js')
+        mapped = [...mapped].sort(byNewest).slice(0, maxRowsPerDataset)
+        truncated = total - mapped.length
+        log.warn(`dataset ${ds.id}: kept the ${mapped.length} newest of ${total} rows (${truncated} older not evaluated). Raise sizing.maxRowsPerDataset to widen this.`)
+      }
+
       rows.push(...mapped)
-      status.push({ id: ds.id, label: ds.label, ok: true, count: mapped.length })
+      status.push({ id: ds.id, label: ds.label, ok: true, count: mapped.length, total, truncated })
       log.debug(`dataset ${ds.id}: ${mapped.length} rows`)
     } catch (err) {
       const denied = /HTTP 40[13]/.test(err.message)

@@ -53,13 +53,14 @@ export class QuiverClient {
     for (const ds of datasets) {
       try {
         const rows = await this.fetchDataset(ds.path, ds.path.includes('/bulk/') ? { page_size: 1 } : {})
-        out.push({ id: ds.id, label: ds.label, plan: ds.plan, ok: true, rows: rows.length })
+        out.push({ id: ds.id, label: ds.label, plan: ds.plan, signalSource: ds.signalSource !== false, ok: true, rows: rows.length })
       } catch (err) {
         const denied = /HTTP 40[13]/.test(err.message)
         out.push({
           id: ds.id,
           label: ds.label,
           plan: ds.plan,
+          signalSource: ds.signalSource !== false,
           ok: false,
           denied,
           error: denied ? `not included in your plan (needs ${ds.plan})` : err.message.split('\n')[0]

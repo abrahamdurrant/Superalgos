@@ -57,7 +57,7 @@ export class UiServer {
       dryRun: this.engine.isDryRun,
       dryRunForcedByEnv: this.engine.settings.dryRunForcedByEnv,
       settings: this.engine.settings.data,
-      datasetCatalog: ALL_DATASETS().map(d => ({ id: d.id, label: d.label, plan: d.plan })),
+      datasetCatalog: ALL_DATASETS().map(d => ({ id: d.id, label: d.label, plan: d.plan, signalSource: d.signalSource !== false })),
       datasetStatus: this.engine.datasetStatus,
       allocationsLoaded: this.engine.allocations ? this.engine.allocations.byPolitician.size : null,
       accountId: this.engine.broker.accountId,
@@ -132,7 +132,7 @@ export class UiServer {
         const { ALL_DATASETS } = await import('./datasets.js')
         const results = await this.engine.quiver.probeDatasets(ALL_DATASETS())
         const patch = {}
-        for (const r of results) patch[r.id] = r.ok
+        for (const r of results) { if (r.signalSource !== false) patch[r.id] = r.ok }
         this.engine.settings.update({ datasets: patch })
         return { results, enabled: results.filter(r => r.ok).map(r => r.id) }
       })().then(r => send(200, r)).catch(e => send(500, { error: e.message }))

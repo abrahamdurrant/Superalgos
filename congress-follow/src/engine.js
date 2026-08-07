@@ -211,7 +211,9 @@ export class Engine {
    */
   async poll () {
     const enabled = { ...this.settings.data.datasets }
-    const { rows: trades, status } = await fetchEnabled(this.quiver, enabled)
+    const { rows: trades, status } = await fetchEnabled(this.quiver, enabled, {
+      maxRowsPerDataset: this.sizingConfig.maxRowsPerDataset ?? 2500
+    })
     this.datasetStatus = status
     const okCount = status.filter(s => s.ok).length
     log.info(`Fetched ${trades.length} rows from ${okCount}/${status.length} dataset(s)`)
