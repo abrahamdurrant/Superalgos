@@ -127,9 +127,20 @@ export class UiServer {
         .catch(e => send(400, { error: e.message }))
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/actor') {
+      return this.#readJson(req)
+        .then(b => this.engine.actorTrades(b.actor))
+        .then(r => send(200, r))
+        .catch(e => send(400, { error: e.message }))
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/performance') {
       return this.#readJson(req)
-        .then(b => this.engine.performance({ groupBy: b.groupBy === 'dataset' ? 'dataset' : 'actor' }))
+        .then(b => this.engine.performance({
+          groupBy: b.groupBy === 'dataset' ? 'dataset' : 'actor',
+          sortBy: b.sortBy,
+          minTrades: Number.isFinite(Number(b.minTrades)) ? Number(b.minTrades) : 3
+        }))
         .then(r => send(200, r))
         .catch(e => send(500, { error: e.message }))
     }
@@ -141,7 +152,11 @@ export class UiServer {
           const ds = datasetById(b.dataset)
           if (!ds) throw new Error(`Unknown dataset "${b.dataset}"`)
           const raw = await this.engine.quiver.fetchDataset(ds.path, b.ticker ? { ticker: b.ticker } : {})
-          return { dataset: ds.id, label: ds.label, rows: raw.slice(0, 100).map(r => ds.normalise(r)) }
+          const { byNewest } = await import('./performance.js')
+          // Newest first: the API does not guarantee an order, and the most
+          // recent disclosure is what matters when deciding to act.
+          const rows = raw.map(r => ({ ...ds.normalise(r), dataset: ds.id })).sort(byNewest)
+          return { dataset: ds.id, label: ds.label, rows: rows.slice(0, 100) }
         })
         .then(r => send(200, r))
         .catch(e => send(400, { error: e.message, denied: /HTTP 40[13]/.test(e.message) }))

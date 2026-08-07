@@ -150,3 +150,10 @@ test('the launch never throws, so a missing opener cannot kill the server', asyn
   const { openBrowser } = await import('../src/open-browser.js')
   assert.doesNotThrow(() => openBrowser('http://127.0.0.1:1/?token=x'))
 })
+
+test('a person row links to their trade history', async () => {
+  const js = extractJs(renderPage('tok'))
+  assert.match(js, /class="who"/, 'the source name must be clickable')
+  assert.match(js, /showActor/, 'clicking must open the per-person view')
+  assert.match(js, /\/api\/actor/, 'which fetches that persons trades')
+})

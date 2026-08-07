@@ -332,3 +332,101 @@ test('insider grants and option exercises are not mistaken for purchases', async
   assert.equal(n.amount, 100000, 'value is shares x price, which the API does not provide directly')
   assert.equal(n.chamber, 'CEO')
 })
+
+// ---- ranking ----
+test('performance ranks best 365d return first by default', async () => {
+  const { analyse } = await import('../src/performance.js')
+  const now = new Date('2026-08-07T00:00:00Z')
+  const mk = (who, pc, n) => Array.from({ length: n }, () => ({
+    actor: who, ticker: 'T', transaction: 'Purchase', transactionDate: '2026-06-01',
+    dataset: 'congresstrading', _raw: { PriceChange: pc, ExcessReturn: pc - 5 }
+  }))
+  const r = analyse([...mk('Mid', 12, 6), ...mk('Best', 30, 6), ...mk('Worst', -4, 6)], { now })
+  assert.deepEqual(r.sources.map(s => s.key), ['Best', 'Mid', 'Worst'])
+  assert.equal(r.sortBy, 'year')
+})
+
+test('a single lucky trade is ranked below sources with a real sample', async () => {
+  const { analyse } = await import('../src/performance.js')
+  const now = new Date('2026-08-07T00:00:00Z')
+  const mk = (who, pc, n) => Array.from({ length: n }, () => ({
+    actor: who, ticker: 'T', transaction: 'Purchase', transactionDate: '2026-06-01',
+    dataset: 'congresstrading', _raw: { PriceChange: pc }
+  }))
+  const r = analyse([...mk('Steady', 12, 10), ...mk('OneLucky', 300, 1)], { now, minTrades: 3 })
+  assert.equal(r.sources[0].key, 'Steady', 'a 300% single trade must not top the ranking')
+  assert.equal(r.sources[1].key, 'OneLucky')
+  assert.equal(r.sources[1].thinSample, true)
+  assert.equal(r.sources[0].thinSample, false)
+})
+
+test('sources with no return data always rank last', async () => {
+  const { analyse } = await import('../src/performance.js')
+  const now = new Date('2026-08-07T00:00:00Z')
+  const r = analyse([
+    { actor: 'NoData', ticker: 'A', transaction: 'Purchase', transactionDate: '2026-06-01', dataset: 'senatetrading', _raw: {} },
+    { actor: 'Negative', ticker: 'B', transaction: 'Purchase', transactionDate: '2026-06-01', dataset: 'congresstrading', _raw: { PriceChange: -50 } }
+  ], { now, minTrades: 1 })
+  assert.equal(r.sources[0].key, 'Negative', 'even a loss ranks above having no data at all')
+  assert.equal(r.sources[1].key, 'NoData')
+})
+
+test('every sort option orders correctly', async () => {
+  const { analyse, SORTS } = await import('../src/performance.js')
+  const now = new Date('2026-08-07T00:00:00Z')
+  const mk = (who, pc, n, date) => Array.from({ length: n }, () => ({
+    actor: who, ticker: 'T', transaction: 'Purchase', transactionDate: date,
+    dataset: 'congresstrading', _raw: { PriceChange: pc, ExcessReturn: pc - 2 }
+  }))
+  const rows = [...mk('Many', 5, 20, '2026-06-01'), ...mk('HighReturn', 40, 4, '2026-06-01')]
+  assert.equal(analyse(rows, { now, sortBy: 'trades' }).sources[0].key, 'Many')
+  assert.equal(analyse(rows, { now, sortBy: 'year' }).sources[0].key, 'HighReturn')
+  assert.equal(analyse(rows, { now, sortBy: 'excess' }).sources[0].key, 'HighReturn')
+  for (const s of SORTS) assert.doesNotThrow(() => analyse(rows, { now, sortBy: s.id }))
+})
+
+test('an unknown sort falls back to the default rather than throwing', async () => {
+  const { analyse } = await import('../src/performance.js')
+  const r = analyse([], { sortBy: 'nonsense' })
+  assert.equal(r.sortBy, 'year')
+})
+
+// ---- per-person history ----
+test('one persons trades come back newest first', async () => {
+  const { tradesFor } = await import('../src/performance.js')
+  const mk = (t, d) => ({ actor: 'Nancy Pelosi', ticker: t, transaction: 'Purchase', transactionDate: d, reportDate: d, dataset: 'congresstrading', _raw: {} })
+  const out = tradesFor([mk('A', '2026-01-15'), mk('C', '2026-07-20'), mk('B', '2026-05-02')], 'Nancy Pelosi')
+  assert.deepEqual(out.map(t => t.ticker), ['C', 'B', 'A'])
+})
+
+test('undated trades sink to the bottom rather than sorting to the top', async () => {
+  const { tradesFor } = await import('../src/performance.js')
+  const mk = (t, d) => ({ actor: 'X', ticker: t, transaction: 'Purchase', transactionDate: d, reportDate: d, dataset: 'congresstrading', _raw: {} })
+  const out = tradesFor([mk('NODATE', null), mk('RECENT', '2026-07-01')], 'X')
+  assert.deepEqual(out.map(t => t.ticker), ['RECENT', 'NODATE'])
+})
+
+test('actor matching is case and whitespace insensitive, and excludes others', async () => {
+  const { tradesFor } = await import('../src/performance.js')
+  const rows = [
+    { actor: 'Nancy Pelosi', ticker: 'A', transaction: 'Purchase', transactionDate: '2026-07-01', dataset: 'congresstrading', _raw: {} },
+    { actor: 'Someone Else', ticker: 'B', transaction: 'Purchase', transactionDate: '2026-07-02', dataset: 'congresstrading', _raw: {} }
+  ]
+  assert.deepEqual(tradesFor(rows, '  NANCY pelosi ').map(t => t.ticker), ['A'])
+})
+
+test('per-person trades carry the return data when it exists', async () => {
+  const { tradesFor } = await import('../src/performance.js')
+  const out = tradesFor([{ actor: 'X', ticker: 'NVDA', transaction: 'Sale', transactionDate: '2026-07-01', dataset: 'congresstrading', _raw: { PriceChange: 14.2, ExcessReturn: 9.8 } }], 'X')
+  assert.equal(out[0].side, 'SELL')
+  assert.equal(out[0].priceChangePct, 14.2)
+  assert.equal(out[0].excessVsSpyPct, 9.8)
+})
+
+test('engine.actorTrades returns the allocation alongside the history', async () => {
+  const e = boot({ settings: { allocations: { 'actor:nancy pelosi': { capitalUsd: 40000, accountId: 'ira-x' } } } })
+  const r = await e.actorTrades('Nancy Pelosi')
+  assert.equal(r.count, 1)
+  assert.equal(r.allocation.capitalUsd, 40000)
+  assert.equal(r.allocation.accountId, 'ira-x')
+})

@@ -76,7 +76,87 @@ function summarise (rows) {
  * Build performance by source. `rows` are normalised dataset rows; the return
  * fields live on the raw record, so they are read from `_raw`.
  */
-export function analyse (rows, { now = new Date(), groupBy = 'actor' } = {}) {
+export const SORTS = [
+  { id: 'year', label: 'Best 365d return' },
+  { id: 'all', label: 'Best all-time return' },
+  { id: 'month', label: 'Best 30d return' },
+  { id: 'excess', label: 'Best vs SPY (365d)' },
+  { id: 'trades', label: 'Most trades' }
+]
+
+/**
+ * Rank sources. Sorting purely on return puts a single lucky trade at the top,
+ * so anything below `minTrades` in the ranking window is pushed below the
+ * ranked set rather than competing with sources that have a real sample.
+ * Sources with no return data at all always sort last.
+ */
+function rank (sources, sortBy, minTrades) {
+  const value = s => {
+    if (sortBy === 'trades') return s.windows.all.trades
+    if (sortBy === 'excess') return s.windows.year.avgExcessVsSpyPct
+    return s.windows[sortBy]?.avgReturnPct
+  }
+  const window = sortBy === 'excess' ? 'year' : (sortBy === 'trades' ? 'all' : sortBy)
+  const sample = s => s.windows[window]?.coverage ?? 0
+
+  const tier = s => {
+    if (!s.measurable) return 2                 // no return data anywhere
+    if (value(s) === null || value(s) === undefined) return 2
+    return sample(s) >= minTrades ? 0 : 1       // thin samples below ranked ones
+  }
+
+  return [...sources].sort((a, b) => {
+    const ta = tier(a); const tb = tier(b)
+    if (ta !== tb) return ta - tb
+    const va = value(a); const vb = value(b)
+    if (va === null || va === undefined) return (vb === null || vb === undefined) ? 0 : 1
+    if (vb === null || vb === undefined) return -1
+    if (vb !== va) return vb - va               // best first
+    return b.windows.all.trades - a.windows.all.trades
+  })
+}
+
+/**
+ * Newest first, by the date the trade was actually made, falling back to the
+ * filing date. Rows with neither sort to the end rather than to the top, which
+ * is what a null date would otherwise do.
+ */
+export function byNewest (a, b) {
+  const at = String(f.transactionDate(a) ?? f.reportDate(a) ?? '')
+  const bt = String(f.transactionDate(b) ?? f.reportDate(b) ?? '')
+  if (!at && !bt) return 0
+  if (!at) return 1
+  if (!bt) return -1
+  if (bt !== at) return bt.localeCompare(at)
+  return String(f.reportDate(b) ?? '').localeCompare(String(f.reportDate(a) ?? ''))
+}
+
+/** One actor's trades, newest first, with whatever return data exists. */
+export function tradesFor (rows, actorName) {
+  const want = String(actorName ?? '').toLowerCase().trim()
+  return (rows ?? [])
+    .filter(r => String(f.actor(r) ?? '').toLowerCase().trim() === want)
+    .sort(byNewest)
+    .map(r => {
+      const raw = r._raw ?? {}
+      const t = String(f.transaction(r) ?? '').toLowerCase()
+      return {
+        side: t.includes('purchase') ? 'BUY' : t.includes('sale') ? 'SELL' : 'OTHER',
+        transaction: f.transaction(r),
+        ticker: f.ticker(r),
+        range: f.range(r),
+        amount: f.amount(r),
+        transactionDate: f.transactionDate(r),
+        reportDate: f.reportDate(r),
+        dataset: r.dataset,
+        chamber: f.chamber(r),
+        priceChangePct: raw.PriceChange ?? null,
+        excessVsSpyPct: raw.ExcessReturn ?? null
+      }
+    })
+}
+
+export function analyse (rows, { now = new Date(), groupBy = 'actor', sortBy = 'year', minTrades = 3 } = {}) {
   const prepared = (rows ?? []).map(r => {
     const raw = r._raw ?? {}
     const t = String(f.transaction(r) ?? '').toLowerCase()
@@ -117,6 +197,13 @@ export function analyse (rows, { now = new Date(), groupBy = 'actor' } = {}) {
     })
   }
 
-  out.sort((a, b) => (b.windows.all.trades ?? 0) - (a.windows.all.trades ?? 0))
-  return { sources: out, generatedAt: now.toISOString() }
+  const sortId = SORTS.some(s => s.id === sortBy) ? sortBy : 'year'
+  const ranked = rank(out, sortId, minTrades)
+  // Flag the ones held back so the UI can explain the ordering rather than
+  // looking arbitrary.
+  const window = sortId === 'excess' ? 'year' : (sortId === 'trades' ? 'all' : sortId)
+  for (const s of ranked) {
+    s.thinSample = s.measurable && (s.windows[window]?.coverage ?? 0) < minTrades
+  }
+  return { sources: ranked, sortBy: sortId, minTrades, generatedAt: now.toISOString() }
 }

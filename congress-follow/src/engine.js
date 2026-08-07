@@ -113,15 +113,29 @@ export class Engine {
     }
   }
 
+  /** Every disclosed trade by one person, newest first. */
+  async actorTrades (actorName) {
+    const { rows, status } = await fetchEnabled(this.quiver, { ...this.settings.data.datasets })
+    this.datasetStatus = status
+    const { tradesFor } = await import('./performance.js')
+    const trades = tradesFor(rows, actorName)
+    return {
+      actor: actorName,
+      trades,
+      count: trades.length,
+      allocation: this.settings.allocationFor({ actor: actorName })
+    }
+  }
+
   /**
    * Performance by source, from whatever return data the API actually carries.
    * See src/performance.js for exactly what these numbers are and are not.
    */
-  async performance ({ groupBy = 'actor' } = {}) {
+  async performance ({ groupBy = 'actor', sortBy = 'year', minTrades = 3 } = {}) {
     const { rows, status } = await fetchEnabled(this.quiver, { ...this.settings.data.datasets })
     this.datasetStatus = status
     const { analyse } = await import('./performance.js')
-    const result = analyse(rows, { groupBy })
+    const result = analyse(rows, { groupBy, sortBy, minTrades })
     return {
       ...result,
       groupBy,

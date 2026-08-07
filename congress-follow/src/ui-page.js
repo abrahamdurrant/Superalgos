@@ -61,6 +61,9 @@ input[type=checkbox]{width:auto;margin-right:7px}
 .danger-zone{border:1px solid var(--live);border-radius:8px;padding:11px;margin-top:14px;background:var(--livebg)}
 .mini{font-size:12px;padding:3px 7px}
 .ovr{width:88px;display:inline-block}
+.dim{opacity:.55}
+a.who{color:var(--accent);text-decoration:none;font-weight:600}
+a.who:hover{text-decoration:underline}
 .ds{display:flex;align-items:center;gap:7px;padding:4px 0;font-size:13px}
 .ds .bad{color:var(--sell);font-size:12px}
 </style></head><body>
@@ -323,15 +326,24 @@ $('prev').onclick=async()=>{
 
 const pct=v=>v==null?'—':(v>=0?'+':'')+v.toFixed(1)+'%';
 
+let PERF_SORT='year', PERF_MIN=3, PERF_GROUP='actor';
+
 async function loadPerf(){
   $('perf').innerHTML='<div class="empty">Loading…</div>';
   try{
-    const p=await api('/api/performance',{method:'POST',body:JSON.stringify({groupBy:'actor'})});
-    const rows=p.sources.slice(0,40).map(s=>{
-      if(!s.measurable) return '<tr><td>'+esc(s.key)+'</td><td>'+s.windows.all.trades+
-        '</td><td colspan="5" class="sub">no return data for this source</td></tr>';
-      return '<tr><td>'+esc(s.key)+'<div class="sub">'+esc(s.dataset||'')+'</div></td><td>'+s.windows.all.trades+'</td>'+
-        ['day','month','year','all'].map(w=>'<td>'+pct(s.windows[w].avgReturnPct)+'</td>').join('')+
+    const p=await api('/api/performance',{method:'POST',
+      body:JSON.stringify({groupBy:PERF_GROUP,sortBy:PERF_SORT,minTrades:PERF_MIN})});
+    const hdr=w=>w===PERF_SORT?' style="background:var(--bg);font-weight:700"':'';
+    const rows=p.sources.slice(0,40).map((s,i)=>{
+      if(!s.measurable) return '<tr class="dim"><td>'+esc(s.key)+'</td><td>'+s.windows.all.trades+
+        '</td><td colspan="6" class="sub">no return data for this source</td></tr>';
+      const rankNo=s.thinSample?'':'<b>'+(i+1)+'.</b> ';
+      return '<tr'+(s.thinSample?' class="dim"':'')+'><td>'+rankNo+
+        '<a href="#" class="who" data-who="'+esc(s.key)+'">'+esc(s.key)+'</a>'+
+        '<div class="sub">'+esc(s.dataset||'')+
+        (s.thinSample?' · only '+s.windows[PERF_SORT==='excess'?'year':PERF_SORT].coverage+' measured trade(s), ranked below':'')+
+        '</div></td><td>'+s.windows.all.trades+'</td>'+
+        ['day','month','year','all'].map(w=>'<td'+hdr(w)+'>'+pct(s.windows[w].avgReturnPct)+'</td>').join('')+
         '<td>'+pct(s.windows.all.avgExcessVsSpyPct)+'</td>'+
         '<td><input class="alloc mini" type="number" min="0" step="100" placeholder="capital" data-key="actor:'+esc(String(s.key).toLowerCase())+'" '+
           'value="'+esc(p.allocations['actor:'+String(s.key).toLowerCase()]?.capitalUsd??'')+'">'+
@@ -343,12 +355,62 @@ async function loadPerf(){
       'These are <b>average returns per disclosed trade</b>, not portfolio returns. Quiver publishes a price change '+
       'and excess-vs-SPY per congressional trade; no endpoint provides a price history, so a true daily/monthly/annual '+
       'compounded return cannot be computed. They are unweighted by position size, and they measure the entry made by the filer, not yours '+
-      '— you buy up to 45 days later. Return data exists only for congress trading.</div>'+
+      '— you buy up to 45 days later. A source with one lucky trade can show a huge number, so anything under the minimum trade count is ranked below the rest. '+
+      'Return data exists only for congress trading.</div>'+
+      '<div class="fld" style="padding:10px 15px;display:flex;gap:10px;align-items:end;flex-wrap:wrap">'+
+        '<div style="flex:0 0 200px"><label>Rank by</label><select id="p_sort">'+
+          [['year','Best 365d return'],['all','Best all-time return'],['month','Best 30d return'],
+           ['excess','Best vs SPY (365d)'],['trades','Most trades']].map(([v,l])=>
+           '<option value="'+v+'"'+(v===PERF_SORT?' selected':'')+'>'+l+'</option>').join('')+'</select></div>'+
+        '<div style="flex:0 0 150px"><label>Min trades</label><input id="p_min" type="number" min="1" value="'+PERF_MIN+'"></div>'+
+        '<div style="flex:0 0 160px"><label>Group by</label><select id="p_grp">'+
+          '<option value="actor"'+(PERF_GROUP==='actor'?' selected':'')+'>Person</option>'+
+          '<option value="dataset"'+(PERF_GROUP==='dataset'?' selected':'')+'>Dataset</option></select></div>'+
+      '</div>'+
       '<div class="wrap"><table><thead><tr><th>Source</th><th>Trades</th><th>24h</th><th>30d</th><th>365d</th><th>All</th><th>vs SPY</th><th>Capital / account</th></tr></thead><tbody>'+
       rows+'</tbody></table></div>';
+    $('p_sort').onchange=()=>{PERF_SORT=$('p_sort').value;loadPerf()};
+    $('p_min').onchange=()=>{PERF_MIN=Math.max(1,Number($('p_min').value)||1);loadPerf()};
+    $('p_grp').onchange=()=>{PERF_GROUP=$('p_grp').value;loadPerf()};
+    document.querySelectorAll('.who').forEach(a=>a.onclick=ev=>{ev.preventDefault();showActor(a.dataset.who)});
     document.querySelectorAll('.alloc').forEach(i=>i.onchange=()=>saveAlloc(i.dataset.key,{capitalUsd:i.value?Number(i.value):null}));
     document.querySelectorAll('.allocacct').forEach(sl=>sl.onchange=()=>saveAlloc(sl.dataset.key,{accountId:sl.value||null}));
   }catch(e){$('perf').innerHTML='<div class="err">'+esc(e.message)+'</div>'}
+}
+
+async function showActor(who){
+  $('dt').textContent=who;
+  $('db').innerHTML='<div class="empty">Loading trades…</div>';
+  $('dok').textContent='Close';$('dok').className='primary';
+  $('dok').onclick=()=>$('dlg').close();$('dc').onclick=()=>$('dlg').close();
+  $('dlg').showModal();
+  try{
+    const r=await api('/api/actor',{method:'POST',body:JSON.stringify({actor:who})});
+    if(!r.count){$('db').innerHTML='<p class="sub">No disclosed trades in the enabled datasets.</p>';return}
+    $('db').innerHTML='<p class="sub">'+r.count+' disclosed trade(s), newest first. '+
+      'Capital allocated: '+usd(r.allocation.capitalUsd)+' ('+esc(r.allocation.source)+')</p>'+
+      '<div class="wrap" style="max-height:52vh;overflow-y:auto"><table><thead><tr>'+
+      '<th>Traded</th><th>Trade</th><th>Size</th><th>Since</th><th>Buy</th></tr></thead><tbody>'+
+      r.trades.slice(0,80).map((t,i)=>'<tr><td class="sub">'+esc(t.transactionDate||'?')+
+        '<div class="sub">filed '+esc(t.reportDate||'?')+'</div></td>'+
+        '<td><span class="side '+esc(t.side)+'">'+esc(t.side)+'</span> <span class="tick">'+esc(t.ticker||'—')+'</span></td>'+
+        '<td class="sub">'+esc(t.range||'—')+'</td>'+
+        '<td>'+(t.priceChangePct==null?'<span class="sub">—</span>':
+          pct(Number(t.priceChangePct))+(t.excessVsSpyPct==null?'':'<div class="sub">vs SPY '+pct(Number(t.excessVsSpyPct))+'</div>'))+'</td>'+
+        '<td>'+(t.ticker&&t.side==='BUY'?'<input class="mini" style="width:74px" id="wamt_'+i+'" type="number" min="1" placeholder="$"> '+
+          '<button class="mini wbuy" data-i="'+i+'" data-t="'+esc(t.ticker)+'">Queue</button>':'')+'</td></tr>').join('')+
+      '</tbody></table></div>';
+    document.querySelectorAll('.wbuy').forEach(b=>b.onclick=async()=>{
+      const amt=$('wamt_'+b.dataset.i).value;
+      if(!amt||Number(amt)<=0)return;
+      try{
+        await api('/api/manual-order',{method:'POST',body:JSON.stringify({
+          ticker:b.dataset.t,notionalUsd:Number(amt),
+          accountId:r.allocation.accountId||null,source:'actor:'+who})});
+        b.textContent='Queued';b.disabled=true;await load();
+      }catch(e){b.textContent='Failed'}
+    });
+  }catch(e){$('db').innerHTML='<div class="err">'+esc(e.message)+'</div>'}
 }
 
 async function saveAlloc(key,patch){

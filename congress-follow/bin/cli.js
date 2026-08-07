@@ -229,13 +229,42 @@ async function main () {
       break
     }
 
+    case 'trades': {
+      const engine = new Engine()
+      const who = args.join(' ')
+      if (!who) throw new Error('Usage: congress-follow trades "Nancy Pelosi"')
+      const r = await engine.actorTrades(who)
+      if (r.count === 0) {
+        console.log(`No disclosed trades found for "${who}" in the enabled datasets.`)
+        console.log('Names must match the feed exactly — try: congress-follow politicians ' + who.split(' ').pop())
+        break
+      }
+      console.log(`${r.count} disclosed trade(s) for ${who}, newest first:\n`)
+      for (const t of r.trades.slice(0, 40)) {
+        const ret = t.priceChangePct == null ? '' :
+          `   since: ${t.priceChangePct >= 0 ? '+' : ''}${Number(t.priceChangePct).toFixed(1)}%` +
+          (t.excessVsSpyPct == null ? '' : ` (vs SPY ${t.excessVsSpyPct >= 0 ? '+' : ''}${Number(t.excessVsSpyPct).toFixed(1)}%)`)
+        console.log(`  ${String(t.transactionDate ?? '?').padEnd(11)} ${String(t.side).padEnd(5)} ${String(t.ticker ?? '—').padEnd(7)} ${String(t.range ?? '—').padEnd(24)}${ret}`)
+        console.log(`              disclosed ${t.reportDate ?? '?'} · ${t.dataset}`)
+      }
+      if (r.count > 40) console.log(`\n  … ${r.count - 40} older.`)
+      break
+    }
+
     case 'performance': {
       const engine = new Engine()
       const groupBy = flags.has('--by-dataset') ? 'dataset' : 'actor'
-      const p = await engine.performance({ groupBy })
+      const sIdx = rest.indexOf('--sort')
+      const mIdx = rest.indexOf('--min-trades')
+      const p = await engine.performance({
+        groupBy,
+        sortBy: sIdx !== -1 ? rest[sIdx + 1] : 'year',
+        minTrades: mIdx !== -1 ? Number(rest[mIdx + 1]) : 3
+      })
       const pct = v => v === null || v === undefined ? '    —' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%'
 
-      console.log(`Average return per disclosed trade, by ${groupBy}.`)
+      console.log(`Average return per disclosed trade, by ${groupBy}, best ${p.sortBy} first.`)
+      console.log(`Sources with fewer than ${p.minTrades} measured trades are listed below the ranked set.`)
       console.log('This is NOT a portfolio return - see the caveats below.\n')
       console.log('  ' + 'Source'.padEnd(26) + 'Trades  ' + ['24h', '30d', '365d', 'all'].map(h => h.padStart(8)).join('') + '   vs SPY (all)')
       for (const s of p.sources.slice(0, 25)) {
@@ -243,11 +272,14 @@ async function main () {
           console.log('  ' + String(s.key).slice(0, 25).padEnd(26) + String(s.windows.all.trades).padStart(6) + '   (no return data for this source)')
           continue
         }
+        const thin = s.thinSample ? '  thin sample' : ''
         console.log('  ' + String(s.key).slice(0, 25).padEnd(26) + String(s.windows.all.trades).padStart(6) + '  ' +
           ['day', 'month', 'year', 'all'].map(w => pct(s.windows[w].avgReturnPct).padStart(8)).join('') +
-          '   ' + pct(s.windows.all.avgExcessVsSpyPct))
+          '   ' + pct(s.windows.all.avgExcessVsSpyPct) + thin)
       }
       console.log('\nCaveats:')
+      console.log('  - A source with one lucky trade can show a huge return. Those are ranked')
+      console.log('    below sources with a real sample; raise --min-trades to be stricter.')
       console.log('  - Return data exists only for congress trading. Senate, House, insiders')
       console.log('    and 13F carry none, so they show as unmeasurable rather than 0%.')
       console.log('  - These are per-trade averages, unweighted by position size.')
@@ -380,7 +412,9 @@ Usage:
   congress-follow politicians <query>  Look up BioGuide IDs for your watchlist
   congress-follow buy <TICKER> <amt>   Queue a trade directly (--account <id>)
   congress-follow sell <TICKER>        Queue a full-position sell
-  congress-follow performance          Per-source return stats (--by-dataset to group by feed)
+  congress-follow trades <name>        One person's trades, newest first
+  congress-follow performance          Per-source returns, best 365d first
+                                       (--sort year|all|month|excess|trades, --min-trades N, --by-dataset)
   congress-follow peek <dataset>       Inspect a dataset's real rows (--raw for full records)
   congress-follow quiver-check         Probe each Quiver endpoint and diagnose a 401
 
