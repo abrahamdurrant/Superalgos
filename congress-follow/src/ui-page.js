@@ -290,7 +290,7 @@ $('auto').onclick=async()=>{
     const r=await api('/api/automate',{method:'POST'});await load();
     await confirmDialog('Automation',r.ran
       ?'<p>Queued '+r.queued+'. Submitted '+r.results.filter(x=>x.ok).length+', blocked '+r.results.filter(x=>!x.ok).length+'.</p>'+
-        (r.results.filter(x=>!x.ok).length?'<pre>'+esc(r.results.filter(x=>!x.ok).map(x=>x.ticker+': '+x.error).join('\n'))+'</pre>':'')
+        (r.results.filter(x=>!x.ok).length?'<pre>'+esc(r.results.filter(x=>!x.ok).map(x=>x.ticker+': '+x.error).join('\\n'))+'</pre>':'')
       :'<p class="sub">'+esc(r.reason)+'</p>','Close');
   }catch(e){await confirmDialog('Failed','<p>'+esc(e.message)+'</p>','Close')}
   finally{$('auto').disabled=false}
