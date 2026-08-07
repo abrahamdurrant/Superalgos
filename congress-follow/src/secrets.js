@@ -4,6 +4,7 @@ import { createInterface } from 'node:readline'
 import { Writable } from 'node:stream'
 import { resolve, dirname } from 'node:path'
 import { homedir, platform } from 'node:os'
+import { log } from './log.js'
 import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -17,6 +18,19 @@ export const SECRET_VARS = {
 }
 
 const cache = new Map()
+
+/**
+ * API tokens never legitimately contain whitespace, but copying one out of a
+ * browser does: a token rendered across two lines yields a space or newline at
+ * the wrap point, and some pages emit non-breaking or zero-width characters.
+ * The server then rejects it with a message that looks nothing like "you pasted
+ * a space", so strip them at every boundary rather than trusting the clipboard.
+ */
+export function sanitizeSecret (value) {
+  return String(value ?? '')
+    // regular whitespace, plus NBSP, zero-width space/non-joiner/joiner and BOM
+    .replace(/[\s\u00A0\u200B\u200C\u200D\uFEFF]/g, '')
+}
 
 /* ------------------------------------------------------------------ *
  * Backend 1: an external command (1Password, pass, Bitwarden, gpg...)  *
@@ -124,7 +138,9 @@ function fromKeychain (varName) {
 }
 
 /** Store a secret. The value is passed via stdin or an interactive prompt, never argv. */
-export function storeSecret (varName, value) {
+export function storeSecret (varName, rawValue) {
+  const value = sanitizeSecret(rawValue)
+  if (!value) throw new Error('Refusing to store an empty value.')
   const { account, label } = SECRET_VARS[varName]
   if (!keychainAvailable()) {
     throw new Error(`No OS keychain available on this system (${keychainName()} tooling not found).`)
@@ -158,6 +174,9 @@ export function storeSecret (varName, value) {
     }
   }
   cache.delete(varName)
+  // Report what was cleaned so a mangled paste is visible, not silently accepted.
+  const removed = String(rawValue ?? '').length - value.length
+  return { stored: value.length, removedWhitespace: removed }
 }
 
 export function deleteSecret (varName) {
@@ -195,12 +214,20 @@ export function deleteSecret (varName) {
 export function resolveSecret (varName, { required = true } = {}) {
   if (cache.has(varName)) return cache.get(varName)
 
-  const found =
+  let found =
     fromCommand(varName) ??
     fromKeychain(varName) ??
     (process.env[varName]
       ? { value: process.env[varName], source: process.env[`__${varName}_FROM_DOTENV`] ? '.env file (plaintext)' : 'environment variable' }
       : null)
+
+  if (found) {
+    const clean = sanitizeSecret(found.value)
+    if (clean !== found.value) {
+      log.warn(`${varName} contained whitespace (likely copied across a line wrap); stripped ${found.value.length - clean.length} character(s) before use.`)
+      found = { ...found, value: clean }
+    }
+  }
 
   if (!found) {
     if (!required) return null

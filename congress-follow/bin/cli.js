@@ -131,8 +131,13 @@ async function main () {
           ? readFileSync(0, 'utf8').trim()
           : await readHidden(`Paste ${SECRET_VARS[varName].label} (input hidden): `)
         if (!value) throw new Error('No value provided.')
-        storeSecret(varName, value)
-        console.log(`Stored ${varName} in ${keychainName()}.`)
+        const res = storeSecret(varName, value)
+        if (res.removedWhitespace > 0) {
+          console.log(`Note: removed ${res.removedWhitespace} whitespace character(s) from what you pasted.`)
+          console.log('      Tokens never contain spaces - this usually means the value wrapped')
+          console.log('      across two lines on the page you copied it from.')
+        }
+        console.log(`Stored ${varName} in ${keychainName()} (${res.stored} characters).`)
         console.log('It is encrypted at rest and never written into this repo.')
         break
       }

@@ -189,3 +189,36 @@ test('a real value in .env is still applied', () => {
   )
   assert.equal(JSON.parse(out).id, '5OC36413')
 })
+
+test('sanitizeSecret strips every whitespace form a browser copy can introduce', async () => {
+  const { sanitizeSecret } = await import('../src/secrets.js')
+  assert.equal(sanitizeSecret('abc def'), 'abcdef', 'plain space')
+  assert.equal(sanitizeSecret('abc\ndef'), 'abcdef', 'newline at a line wrap')
+  assert.equal(sanitizeSecret('abc\r\ndef'), 'abcdef', 'CRLF')
+  assert.equal(sanitizeSecret('abc\tdef'), 'abcdef', 'tab')
+  assert.equal(sanitizeSecret('abc def'), 'abcdef', 'non-breaking space')
+  assert.equal(sanitizeSecret('abc​def'), 'abcdef', 'zero-width space')
+  assert.equal(sanitizeSecret('﻿abc'), 'abc', 'BOM')
+  assert.equal(sanitizeSecret('  abc  '), 'abc', 'surrounding whitespace')
+})
+
+test('a key stored with whitespace is cleaned at read time, without re-entry', () => {
+  // Regression: Quiver returned "Invalid Token header. Token should not contain
+  // spaces." because a token copied across a line wrap carried a newline.
+  const out = run(
+    `import { resolveSecret } from './src/secrets.js'
+     console.log(JSON.stringify(resolveSecret('QUIVER_API_KEY').value))`,
+    { QUIVER_API_KEY: 'abc def\nghi' }
+  )
+  assert.equal(JSON.parse(out), 'abcdefghi')
+})
+
+test('the resolved key can never produce a multi-part Authorization header', () => {
+  const out = run(
+    `import { resolveSecret } from './src/secrets.js'
+     const v = resolveSecret('QUIVER_API_KEY').value
+     console.log(JSON.stringify(('Token ' + v).split(' ').length))`,
+    { QUIVER_API_KEY: 'has one space' }
+  )
+  assert.equal(JSON.parse(out), 2, 'header must split into exactly [scheme, token]')
+})
