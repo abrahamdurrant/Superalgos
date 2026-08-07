@@ -10,10 +10,11 @@
     "congress-follow": "./bin/cli.js"
   },
   "scripts": {
-    "test": "node --test test/engine.test.js test/secrets.test.js test/quiver.test.js test/audit-regressions.test.js",
+    "test": "node --test test/engine.test.js test/secrets.test.js test/quiver.test.js test/audit-regressions.test.js test/ui.test.js",
     "start": "node bin/cli.js watch",
     "poll": "node bin/cli.js poll",
-    "pending": "node bin/cli.js pending"
+    "pending": "node bin/cli.js pending",
+    "ui": "node bin/cli.js ui"
   },
   "license": "Apache-2.0",
   "private": true

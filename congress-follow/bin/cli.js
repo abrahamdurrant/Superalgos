@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { Engine } from '../src/engine.js'
 import { QuiverClient } from '../src/quiver.js'
 import { PublicClient } from '../src/public-client.js'
+import { UiServer } from '../src/ui-server.js'
 import { config } from '../src/config.js'
 import { log } from '../src/log.js'
 import { SECRET_VARS, storeSecret, deleteSecret, describeSecrets, doctor, readHidden, keychainName, keychainAvailable, selfTest } from '../src/secrets.js'
@@ -184,6 +185,18 @@ async function main () {
       break
     }
 
+    case 'ui': {
+      banner()
+      const ui = new UiServer({ port: Number(args[0]) || undefined })
+      const url = await ui.listen()
+      console.log('\nControl panel ready. Open this URL:\n')
+      console.log('  ' + url + '\n')
+      console.log('Bound to 127.0.0.1 only, and the token above is required on every request,')
+      console.log('so nothing else on your network or in another browser tab can reach it.')
+      console.log('The token changes each time you start it. Ctrl-C to stop.')
+      break
+    }
+
     case 'quiver-check': {
       const quiver = new QuiverClient()
       const { describeSecrets } = await import('../src/secrets.js')
@@ -245,6 +258,7 @@ async function main () {
       console.log(`congress-follow - queue congressional-disclosure trades for manual approval on Public.com
 
 Usage:
+  congress-follow ui [port]            Open the approval control panel in a browser
   congress-follow poll                 Fetch new disclosures and queue matching trades
   congress-follow watch                Poll on a loop (POLL_MINUTES, default 60)
   congress-follow pending [--verbose]  List orders awaiting approval
