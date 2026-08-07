@@ -20,6 +20,10 @@ function loadDotEnv () {
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1)
     }
+    // An empty placeholder (KEY=) counts as unset. Otherwise the commented-out
+    // stub shipped in .env.example would shadow a real value added lower down
+    // the file, and the setting would silently never take effect.
+    if (value === '') continue
     process.env[key] = value
     process.env[`__${key}_FROM_DOTENV`] = '1'
   }

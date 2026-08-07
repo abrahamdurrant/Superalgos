@@ -173,3 +173,19 @@ test('selfTest restores the real account name after running', () => {
   assert.equal(after, before, 'the probe account name must not leak into normal operation')
   assert.equal(after, 'quiver-api-key')
 })
+
+test('an empty .env placeholder does not shadow a real value set later in the file', () => {
+  // Regression: .env.example ships `PUBLIC_ACCOUNT_ID=`. Appending the real value
+  // at the bottom left the empty line winning, so the setting silently never applied.
+  const src = readFileSync(resolve(root, 'src/config.js'), 'utf8')
+  assert.match(src, /if \(value === ''\) continue/, 'empty values must be treated as unset')
+})
+
+test('a real value in .env is still applied', () => {
+  const out = run(
+    `import { config } from './src/config.js'
+     console.log(JSON.stringify({ id: config.public.accountId }))`,
+    { PUBLIC_ACCOUNT_ID: '5OC36413' }
+  )
+  assert.equal(JSON.parse(out).id, '5OC36413')
+})
