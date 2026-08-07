@@ -430,3 +430,96 @@ test('engine.actorTrades returns the allocation alongside the history', async ()
   assert.equal(r.allocation.capitalUsd, 40000)
   assert.equal(r.allocation.accountId, 'ira-x')
 })
+
+// ---- follow / unfollow ----
+import { mkdirSync, writeFileSync as wf, readFileSync as rf } from 'node:fs'
+
+function bootWithWatchlistFile (initial = { follow: [] }) {
+  const dir = tmp()
+  const wlPath = join(dir, 'watchlist.json')
+  mkdirSync(dir, { recursive: true })
+  wf(wlPath, JSON.stringify(initial, null, 2))
+  process.env.WATCHLIST_PATH = wlPath
+  const settings = new Settings(join(dir, 'settings.json'))
+  const e = new Engine({
+    store: new Store(join(dir, 'data', 'store.json')),
+    quiver: { async fetchDataset (p) { return p.includes('congresstrading') ? [trade()] : [] }, async congressHoldings () { return [] } },
+    broker: new FakeBroker(),
+    settings
+  })
+  return { e, wlPath, read: () => JSON.parse(rf(wlPath, 'utf8')) }
+}
+
+test('following writes to the watchlist file and takes effect immediately', async () => {
+  const { e, read } = bootWithWatchlistFile()
+  assert.equal((await e.poll()).queued.length, 0, 'nobody followed yet')
+
+  const r = e.follow({ name: 'Nancy Pelosi', bioGuideId: 'P000197' })
+  assert.equal(r.added, true)
+  assert.equal(r.nameOnly, false)
+  assert.equal(read().follow[0].bioGuideId, 'P000197')
+
+  const e2 = new Engine({ store: e.store, quiver: e.quiver, broker: e.broker, settings: e.settings })
+  assert.equal((await e2.poll()).queued.length, 1, 'their disclosures are picked up')
+  delete process.env.WATCHLIST_PATH
+})
+
+test('following without an id is flagged as name-only matching', () => {
+  const { e } = bootWithWatchlistFile()
+  const r = e.follow({ name: 'Jensen Huang' })
+  assert.equal(r.added, true)
+  assert.equal(r.nameOnly, true, 'insider and fund rows carry no stable id')
+  delete process.env.WATCHLIST_PATH
+})
+
+test('following someone twice is a no-op, not a duplicate', () => {
+  const { e, read } = bootWithWatchlistFile()
+  e.follow({ name: 'Nancy Pelosi', bioGuideId: 'P000197' })
+  const again = e.follow({ name: 'Nancy Pelosi', bioGuideId: 'P000197' })
+  assert.equal(again.alreadyFollowing, true)
+  assert.equal(read().follow.length, 1)
+  delete process.env.WATCHLIST_PATH
+})
+
+test('re-following someone previously disabled turns them back on', () => {
+  const { e, read } = bootWithWatchlistFile({ follow: [{ bioGuideId: 'P000197', name: 'Nancy Pelosi', enabled: false }] })
+  const r = e.follow({ name: 'Nancy Pelosi', bioGuideId: 'P000197' })
+  assert.equal(r.added, true)
+  assert.equal(read().follow[0].enabled, true)
+  assert.equal(read().follow.length, 1, 'no duplicate entry')
+  delete process.env.WATCHLIST_PATH
+})
+
+test('unfollowing removes them and stops new signals', async () => {
+  const { e, read } = bootWithWatchlistFile({ follow: [{ bioGuideId: 'P000197', name: 'Nancy Pelosi', enabled: true }] })
+  assert.equal((await e.poll()).queued.length, 1)
+
+  const r = e.unfollow({ name: 'Nancy Pelosi', bioGuideId: 'P000197' })
+  assert.equal(r.removed, true)
+  assert.equal(read().follow.length, 0)
+
+  const e2 = new Engine({ store: new Store(join(tmp(), 'd', 's.json')), quiver: e.quiver, broker: e.broker, settings: e.settings })
+  assert.equal((await e2.poll()).queued.length, 0, 'no new signals after unfollowing')
+  delete process.env.WATCHLIST_PATH
+})
+
+test('unfollowing someone not followed reports it rather than throwing', () => {
+  const { e } = bootWithWatchlistFile()
+  assert.equal(e.unfollow({ name: 'Nobody' }).removed, false)
+  delete process.env.WATCHLIST_PATH
+})
+
+test('an empty watchlist is a valid state, not a startup error', () => {
+  const { e } = bootWithWatchlistFile({ follow: [] })
+  assert.doesNotThrow(() => e.follow({ name: 'A', bioGuideId: 'X1' }))
+  delete process.env.WATCHLIST_PATH
+})
+
+test('editing the watchlist preserves unrelated keys in the file', () => {
+  const { e, read } = bootWithWatchlistFile({ $comment: 'keep me', follow: [], rules: { sides: ['BUY'] } })
+  e.follow({ name: 'A', bioGuideId: 'X1' })
+  const after = read()
+  assert.equal(after.$comment, 'keep me')
+  assert.deepEqual(after.rules.sides, ['BUY'])
+  delete process.env.WATCHLIST_PATH
+})

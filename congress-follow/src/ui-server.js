@@ -127,6 +127,20 @@ export class UiServer {
         .catch(e => send(400, { error: e.message }))
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/follow') {
+      return this.#readJson(req)
+        .then(b => this.engine.follow(b))
+        .then(r => send(200, { ok: true, ...r }))
+        .catch(e => send(400, { error: e.message }))
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/unfollow') {
+      return this.#readJson(req)
+        .then(b => this.engine.unfollow(b))
+        .then(r => send(200, { ok: true, ...r }))
+        .catch(e => send(400, { error: e.message }))
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/actor') {
       return this.#readJson(req)
         .then(b => this.engine.actorTrades(b.actor))
@@ -151,15 +165,33 @@ export class UiServer {
           const { datasetById } = await import('./datasets.js')
           const ds = datasetById(b.dataset)
           if (!ds) throw new Error(`Unknown dataset "${b.dataset}"`)
-          const raw = await this.engine.quiver.fetchDataset(ds.path, b.ticker ? { ticker: b.ticker } : {})
-          const { byNewest } = await import('./performance.js')
-          // Newest first: the API does not guarantee an order, and the most
-          // recent disclosure is what matters when deciding to act.
-          const rows = raw.map(r => ({ ...ds.normalise(r), dataset: ds.id })).sort(byNewest)
-          return { dataset: ds.id, label: ds.label, rows: rows.slice(0, 100) }
+          try {
+            const raw = await this.engine.quiver.fetchDataset(ds.path, b.ticker ? { ticker: b.ticker } : {})
+            const { byNewest } = await import('./performance.js')
+            // Newest first: the API does not guarantee an order, and the most
+            // recent disclosure is what matters when deciding to act.
+            const rows = raw.map(r => ({ ...ds.normalise(r), dataset: ds.id })).sort(byNewest)
+            return { dataset: ds.id, label: ds.label, rows: rows.slice(0, 100) }
+          } catch (err) {
+            // When a dataset with a known plan requirement is refused, the cause
+            // is not ambiguous - say so instead of listing possibilities.
+            if (/HTTP 40[13]/.test(err.message) && ds.plan && ds.plan !== 'Hobbyist') {
+              const e = new Error(`${ds.label} requires the Quiver API ${ds.plan} plan.`)
+              e.planGated = true
+              e.dataset = ds.id
+              e.requiredPlan = ds.plan
+              throw e
+            }
+            throw err
+          }
         })
         .then(r => send(200, r))
-        .catch(e => send(400, { error: e.message, denied: /HTTP 40[13]/.test(e.message) }))
+        .catch(e => send(400, {
+          error: e.message,
+          planGated: Boolean(e.planGated),
+          requiredPlan: e.requiredPlan ?? null,
+          denied: /HTTP 40[13]/.test(e.message)
+        }))
     }
 
     if (req.method === 'POST' && url.pathname === '/api/amend') {

@@ -115,7 +115,8 @@ let STATE=null,LIVE=false,ACCOUNTS=[];
 
 const api=(p,opt={})=>fetch(p+(p.includes('?')?'&':'?')+'token='+TOKEN,
   {...opt,headers:{'content-type':'application/json','x-cf-token':TOKEN}})
-  .then(async r=>{const j=await r.json().catch(()=>({error:'Bad response'}));if(!r.ok)throw new Error(j.error||r.status);return j});
+  .then(async r=>{const j=await r.json().catch(()=>({error:'Bad response'}));
+    if(!r.ok){const e=new Error(j.error||r.status);Object.assign(e,j);throw e}return j});
 
 function confirmDialog(title,html,okLabel){
   return new Promise(res=>{
@@ -173,8 +174,12 @@ function render(){
       '</tbody></table></div>':'<div class="empty">No open positions.</div>');
 
   $('hist').innerHTML=orderRows(s.history,false);
-  $('cfg').innerHTML='<div class="wrap"><table><thead><tr><th>Following</th><th>BioGuide ID</th><th>Weight</th></tr></thead><tbody>'+
-    s.following.map(f=>'<tr><td>'+esc(f.name||'—')+'</td><td class="tick">'+esc(f.bioGuideId||'—')+'</td><td>'+esc(f.weight)+'</td></tr>').join('')+
+  $('cfg').innerHTML=(s.following.length?'':'<div class="empty">Not following anyone yet. Use the Explore tab to add people.</div>')+
+    '<div class="wrap"><table><thead><tr><th>Following</th><th>BioGuide ID</th><th>Weight</th><th></th></tr></thead><tbody>'+
+    s.following.map(f=>'<tr><td><a href="#" class="who" data-who="'+esc(f.name||'')+'">'+esc(f.name||'—')+'</a></td>'+
+      '<td class="tick">'+esc(f.bioGuideId||'—')+(f.bioGuideId?'':'<div class="sub">name match only</div>')+'</td>'+
+      '<td>'+esc(f.weight)+'</td>'+
+      '<td><button class="mini unfollow danger" data-n="'+esc(f.name||'')+'" data-id="'+esc(f.bioGuideId||'')+'">Unfollow</button></td></tr>').join('')+
     '</tbody></table></div><div class="sub" style="padding:10px 15px">'+
     'Sizing: <b>'+esc(s.settings?.sizing?.mode||'?')+'</b>'+
     (s.settings?.sizing?.mode==='mirror'?' against '+usd(s.settings.sizing.capitalUsd)+' capital':'')+
@@ -184,6 +189,8 @@ function render(){
 
   document.querySelectorAll('.ap').forEach(b=>b.onclick=()=>approve(b.dataset.id));
   document.querySelectorAll('.rj').forEach(b=>b.onclick=()=>reject(b.dataset.id));
+  document.querySelectorAll('.unfollow').forEach(b=>b.onclick=()=>doUnfollow(b.dataset.n,b.dataset.id));
+  document.querySelectorAll('.who').forEach(a=>a.onclick=ev=>{ev.preventDefault();showActor(a.dataset.who)});
   document.querySelectorAll('.ovr').forEach(i=>i.onchange=()=>amend(i.dataset.id,{sizeOverrideUsd:i.value?Number(i.value):null}));
   document.querySelectorAll('.acct').forEach(sl=>sl.onchange=()=>amend(sl.dataset.id,{accountId:sl.value||null}));
 }
@@ -378,6 +385,31 @@ async function loadPerf(){
   }catch(e){$('perf').innerHTML='<div class="err">'+esc(e.message)+'</div>'}
 }
 
+function isFollowed(name,id){
+  return (STATE.following||[]).some(f=>
+    (id&&f.bioGuideId&&String(f.bioGuideId).toUpperCase()===String(id).toUpperCase())||
+    (String(f.name||'').toLowerCase()===String(name||'').toLowerCase()));
+}
+
+async function doFollow(name,bioGuideId,btn){
+  try{
+    const r=await api('/api/follow',{method:'POST',body:JSON.stringify({name,bioGuideId:bioGuideId||null})});
+    await load();
+    if(btn){btn.textContent='Following';btn.disabled=true}
+    if(r.alreadyFollowing)return;
+    if(r.nameOnly)await confirmDialog('Following '+name,
+      '<p class="sub">This feed carries no stable id for them, so matching is by name only. '+
+      'Names are spelled inconsistently across filings and two people can share one, so this may match more or less than you intend.</p>','Close');
+  }catch(e){await confirmDialog('Could not follow','<p>'+esc(e.message)+'</p>','Close')}
+}
+
+async function doUnfollow(name,bioGuideId){
+  if(!await confirmDialog('Unfollow '+name,
+    '<p class="sub">New disclosures from them stop being queued. Orders already pending are left alone.</p>','Unfollow'))return;
+  try{await api('/api/unfollow',{method:'POST',body:JSON.stringify({name,bioGuideId:bioGuideId||null})});await load()}
+  catch(e){await confirmDialog('Could not unfollow','<p>'+esc(e.message)+'</p>','Close')}
+}
+
 async function showActor(who){
   $('dt').textContent=who;
   $('db').innerHTML='<div class="empty">Loading trades…</div>';
@@ -389,6 +421,8 @@ async function showActor(who){
     if(!r.count){$('db').innerHTML='<p class="sub">No disclosed trades in the enabled datasets.</p>';return}
     $('db').innerHTML='<p class="sub">'+r.count+' disclosed trade(s), newest first. '+
       'Capital allocated: '+usd(r.allocation.capitalUsd)+' ('+esc(r.allocation.source)+')</p>'+
+      '<p><button id="actfollow" class="mini'+(isFollowed(who,null)?'':' primary')+'">'+
+      (isFollowed(who,null)?'Unfollow':'Follow')+' '+esc(who)+'</button></p>'+
       '<div class="wrap" style="max-height:52vh;overflow-y:auto"><table><thead><tr>'+
       '<th>Traded</th><th>Trade</th><th>Size</th><th>Since</th><th>Buy</th></tr></thead><tbody>'+
       r.trades.slice(0,80).map((t,i)=>'<tr><td class="sub">'+esc(t.transactionDate||'?')+
@@ -400,6 +434,10 @@ async function showActor(who){
         '<td>'+(t.ticker&&t.side==='BUY'?'<input class="mini" style="width:74px" id="wamt_'+i+'" type="number" min="1" placeholder="$"> '+
           '<button class="mini wbuy" data-i="'+i+'" data-t="'+esc(t.ticker)+'">Queue</button>':'')+'</td></tr>').join('')+
       '</tbody></table></div>';
+    $('actfollow').onclick=async()=>{
+      if(isFollowed(who,null)){await doUnfollow(who,null)}else{await doFollow(who,null,null)}
+      $('dlg').close();
+    };
     document.querySelectorAll('.wbuy').forEach(b=>b.onclick=async()=>{
       const amt=$('wamt_'+b.dataset.i).value;
       if(!amt||Number(amt)<=0)return;
@@ -427,7 +465,7 @@ async function saveAlloc(key,patch){
 async function loadExplore(dsId){
   const cat=STATE.datasetCatalog;
   const sel='<select id="expl_ds">'+cat.map(d=>'<option value="'+esc(d.id)+'"'+(d.id===dsId?' selected':'')+'>'+
-    esc(d.label)+' ('+esc(d.plan)+')</option>').join('')+'</select>';
+    esc(d.label)+(d.plan==='Hobbyist'?'':' — needs API '+esc(d.plan)+' plan')+'</option>').join('')+'</select>';
   $('expl').innerHTML='<div class="fld" style="padding:12px 15px">'+sel+
     ' <input id="expl_tk" class="mini" style="width:110px" placeholder="ticker (optional)"> '+
     '<button id="expl_go" class="mini primary">Load</button></div><div id="expl_rows"></div>';
@@ -437,19 +475,30 @@ async function loadExplore(dsId){
     $('expl_rows').innerHTML='<div class="empty">Loading…</div>';
     try{
       const r=await api('/api/browse',{method:'POST',body:JSON.stringify({dataset:id,ticker:tk||undefined})});
-      $('expl_rows').innerHTML=r.rows.length?'<div class="wrap"><table><thead><tr><th>Trade</th><th>Size</th><th>Dates</th><th>Buy</th></tr></thead><tbody>'+
+      $('expl_rows').innerHTML=r.rows.length?'<div class="wrap"><table><thead><tr><th>Trade</th><th>Size</th><th>Dates</th><th>Buy</th><th>Watchlist</th></tr></thead><tbody>'+
         r.rows.map((n,i)=>'<tr><td><span class="side '+(String(n.transaction).includes("Purchase")?"BUY":"SELL")+'">'+esc(n.transaction)+'</span> '+
           '<span class="tick">'+esc(n.ticker||'—')+'</span><div class="sub">'+esc(n.actor||'')+(n.chamber?' · '+esc(n.chamber):'')+'</div></td>'+
           '<td>'+esc(n.range||(n.amount?usd(n.amount):'—'))+'</td>'+
           '<td class="sub">traded '+esc(n.transactionDate||'?')+'<br>filed '+esc(n.reportDate||'?')+'</td>'+
           '<td>'+(n.ticker?'<input class="mini" style="width:80px" id="amt_'+i+'" type="number" min="1" placeholder="$"> '+
             '<select class="mini" id="acc_'+i+'">'+accountOptions(null)+'</select> '+
-            '<button class="mini buyrow" data-i="'+i+'" data-t="'+esc(n.ticker)+'" data-s="'+esc(id)+'">Queue</button>':'')+'</td></tr>').join('')+
+            '<button class="mini buyrow" data-i="'+i+'" data-t="'+esc(n.ticker)+'" data-s="'+esc(id)+'">Queue</button>':'')+'</td>'+
+          '<td>'+(n.actor?'<button class="mini followrow" data-n="'+esc(n.actor)+'" data-id="'+esc(n.actorId||'')+'">'+
+            (isFollowed(n.actor,n.actorId)?'Following':'Follow')+'</button>':'')+'</td></tr>').join('')+
         '</tbody></table></div>':'<div class="empty">No rows.</div>';
       document.querySelectorAll('.buyrow').forEach(b=>b.onclick=()=>queueBuy(b.dataset.t,$('amt_'+b.dataset.i).value,$('acc_'+b.dataset.i).value,b.dataset.s));
+      document.querySelectorAll('.followrow').forEach(b=>b.onclick=()=>doFollow(b.dataset.n,b.dataset.id,b));
     }catch(e){
-      $('expl_rows').innerHTML='<div class="err">'+esc(e.message)+
-        (e.message.includes('40')?'<br><span class="sub">Insiders and 13F need the Quiver Trader plan; congress, Trump and lobbying are on Hobbyist.</span>':'')+'</div>';
+      const gated=e.planGated||/requires the Quiver API/.test(e.message||'');
+      $('expl_rows').innerHTML=gated
+        ? '<div class="err" style="background:var(--warnbg);color:var(--warn)">'+
+          '<b>'+esc(e.message)+'</b><br>'+
+          '<span class="sub">Your API plan is Hobbyist, which covers Congress, Senate, House, Trump trades, '+
+          'government contracts and lobbying.<br><br>'+
+          '<b>A Quiver web subscription is billed separately and does not grant API access.</b> '+
+          'Holding web Trader does not unlock Trader datasets over the API — that is a separate '+
+          '$75/mo API plan at api.quiverquant.com/pricing.</span></div>'
+        : '<div class="err">'+esc(e.message)+'</div>';
     }
   };
   $('expl_go').click();

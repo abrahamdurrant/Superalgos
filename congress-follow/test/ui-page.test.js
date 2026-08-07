@@ -157,3 +157,12 @@ test('a person row links to their trade history', async () => {
   assert.match(js, /showActor/, 'clicking must open the per-person view')
   assert.match(js, /\/api\/actor/, 'which fetches that persons trades')
 })
+
+test('Explore offers Follow and Following offers Unfollow', () => {
+  const js = extractJs(renderPage('tok'))
+  assert.match(js, /followrow/, 'Explore rows must offer Follow')
+  assert.match(js, /class="mini unfollow danger"/, 'Following rows must offer Unfollow')
+  assert.match(js, /\/api\/follow/)
+  assert.match(js, /\/api\/unfollow/)
+  assert.match(js, /isFollowed/, 'the button must reflect current state')
+})

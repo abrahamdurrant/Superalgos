@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveSecret } from './secrets.js'
@@ -48,15 +48,25 @@ const DEFAULT_GUARDRAILS = {
   requireHeldPositionToSell: true
 }
 
+export const watchlistPath = () => process.env.WATCHLIST_PATH || resolve(root, 'config/watchlist.json')
+
+/** The file exactly as written, so edits preserve comments and unknown keys. */
+export function readWatchlistFile (path = watchlistPath()) {
+  if (!existsSync(path)) throw new Error(`Watchlist not found at ${path}.`)
+  return JSON.parse(readFileSync(path, 'utf8'))
+}
+
+export function writeWatchlistFile (data, path = watchlistPath()) {
+  writeFileSync(path, JSON.stringify(data, null, 2) + '\n')
+  return data
+}
+
 export function loadWatchlist (path = process.env.WATCHLIST_PATH || resolve(root, 'config/watchlist.json')) {
   if (!existsSync(path)) {
     throw new Error(`Watchlist not found at ${path}. Copy config/watchlist.example.json to config/watchlist.json and edit it.`)
   }
   const parsed = JSON.parse(readFileSync(path, 'utf8'))
   const follow = (parsed.follow || []).filter(f => f.enabled !== false)
-  if (follow.length === 0) {
-    throw new Error(`No enabled entries in ${path}. Add at least one politician with "enabled": true.`)
-  }
   return {
     follow,
     rules: { ...DEFAULT_RULES, ...(parsed.rules || {}) },

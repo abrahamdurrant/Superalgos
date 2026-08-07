@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { config, loadWatchlist } from './config.js'
+import { config, loadWatchlist, readWatchlistFile, writeWatchlistFile } from './config.js'
 import { QuiverClient } from './quiver.js'
 import { PublicClient } from './public-client.js'
 import { Store } from './store.js'
@@ -111,6 +111,65 @@ export class Engine {
         reportDate: f.reportDate(s.trade)
       }))
     }
+  }
+
+  /**
+   * Add someone to the watchlist and reload it.
+   *
+   * Matching prefers a stable id. Congressional rows carry a BioGuideID;
+   * insider and fund rows carry none, so those fall back to name matching and
+   * are flagged, since two people can share a name and the feeds spell them
+   * inconsistently.
+   */
+  follow ({ name, bioGuideId = null, weight = 1, bucket = null, accountId = null } = {}) {
+    const who = String(name ?? '').trim()
+    if (!who) throw new Error('A name is required to follow someone.')
+
+    const file = readWatchlistFile()
+    file.follow ??= []
+    const same = e =>
+      (bioGuideId && e.bioGuideId && String(e.bioGuideId).toUpperCase() === String(bioGuideId).toUpperCase()) ||
+      (String(e.name ?? '').trim().toLowerCase() === who.toLowerCase())
+
+    const existing = file.follow.find(same)
+    if (existing) {
+      if (existing.enabled === false) {
+        existing.enabled = true            // re-following someone previously turned off
+      } else {
+        return { added: false, alreadyFollowing: true, entry: existing }
+      }
+    } else {
+      file.follow.push({
+        bioGuideId: bioGuideId || undefined,
+        name: who,
+        weight: Number(weight) || 1,
+        ...(bucket ? { bucket } : {}),
+        ...(accountId ? { accountId } : {}),
+        enabled: true
+      })
+    }
+    writeWatchlistFile(file)
+    this.watchlist = loadWatchlist()
+    return {
+      added: true,
+      nameOnly: !bioGuideId,
+      entry: this.watchlist.follow.find(same)
+    }
+  }
+
+  /** Remove someone from the watchlist. Queued orders are left alone. */
+  unfollow ({ name, bioGuideId = null } = {}) {
+    const file = readWatchlistFile()
+    file.follow ??= []
+    const before = file.follow.length
+    file.follow = file.follow.filter(e => !(
+      (bioGuideId && e.bioGuideId && String(e.bioGuideId).toUpperCase() === String(bioGuideId).toUpperCase()) ||
+      (name && String(e.name ?? '').trim().toLowerCase() === String(name).trim().toLowerCase())
+    ))
+    if (file.follow.length === before) return { removed: false }
+    writeWatchlistFile(file)
+    this.watchlist = loadWatchlist()
+    return { removed: true, remaining: this.watchlist.follow.length }
   }
 
   /** Every disclosed trade by one person, newest first. */

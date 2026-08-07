@@ -229,6 +229,28 @@ async function main () {
       break
     }
 
+    case 'follow':
+    case 'unfollow': {
+      const engine = new Engine()
+      const who = args.join(' ')
+      if (!who) throw new Error(`Usage: congress-follow ${command} "Nancy Pelosi" [--id P000197]`)
+      const iIdx = rest.indexOf('--id')
+      const bioGuideId = iIdx !== -1 ? rest[iIdx + 1] : null
+      if (command === 'follow') {
+        const r = engine.follow({ name: who, bioGuideId })
+        if (r.alreadyFollowing) { console.log(`Already following ${who}.`); break }
+        console.log(`Now following ${who}${bioGuideId ? ` (${bioGuideId})` : ''}.`)
+        if (r.nameOnly) {
+          console.log('No BioGuide ID given, so matching is by name only, which is less reliable.')
+          console.log(`Find the id with: congress-follow politicians ${who.split(' ').pop()}`)
+        }
+      } else {
+        const r = engine.unfollow({ name: who, bioGuideId })
+        console.log(r.removed ? `Unfollowed ${who}. ${r.remaining} still followed.` : `Not currently following "${who}".`)
+      }
+      break
+    }
+
     case 'trades': {
       const engine = new Engine()
       const who = args.join(' ')
@@ -412,6 +434,8 @@ Usage:
   congress-follow politicians <query>  Look up BioGuide IDs for your watchlist
   congress-follow buy <TICKER> <amt>   Queue a trade directly (--account <id>)
   congress-follow sell <TICKER>        Queue a full-position sell
+  congress-follow follow <name>        Add someone to the watchlist (--id <BioGuideID>)
+  congress-follow unfollow <name>      Remove them
   congress-follow trades <name>        One person's trades, newest first
   congress-follow performance          Per-source returns, best 365d first
                                        (--sort year|all|month|excess|trades, --min-trades N, --by-dataset)

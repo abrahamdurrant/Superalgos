@@ -212,3 +212,68 @@ test('automation through the UI respects the unproven-submit-path gate', async (
     assert.equal(engine.broker.placed.length, 0)
   } finally { ui.close(); delete process.env.DRY_RUN }
 })
+
+test('a plan-gated dataset returns a specific reason, not a list of possibilities', async () => {
+  const { ui, engine, base, token } = await boot()
+  engine.quiver.fetchDataset = async () => { throw new Error('Quiver /beta/live/sec13f failed: HTTP 403 {"detail":"..."}') }
+  try {
+    const res = await fetch(`${base}/api/browse?token=${token}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dataset: 'sec13f' })
+    })
+    const j = await res.json()
+    assert.equal(j.planGated, true)
+    assert.equal(j.requiredPlan, 'Trader')
+    assert.match(j.error, /requires the Quiver API Trader plan/)
+    // The old message speculated about truncated keys and stale copies.
+    assert.doesNotMatch(j.error, /truncated|stray characters|regenerated/)
+  } finally { ui.close() }
+})
+
+test('a non-plan error is still reported verbatim', async () => {
+  const { ui, engine, base, token } = await boot()
+  engine.quiver.fetchDataset = async () => { throw new Error('socket hang up') }
+  try {
+    const j = await (await fetch(`${base}/api/browse?token=${token}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dataset: 'congresstrading' })
+    })).json()
+    assert.equal(j.planGated, false)
+    assert.match(j.error, /socket hang up/)
+  } finally { ui.close() }
+})
+
+test('a 403 on a Hobbyist dataset is NOT blamed on the plan', async () => {
+  const { ui, engine, base, token } = await boot()
+  engine.quiver.fetchDataset = async () => { throw new Error('Quiver failed: HTTP 403') }
+  try {
+    const j = await (await fetch(`${base}/api/browse?token=${token}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dataset: 'congresstrading' })
+    })).json()
+    assert.equal(j.planGated, false, 'congress is on Hobbyist, so a 403 means something else')
+  } finally { ui.close() }
+})
+
+test('follow and unfollow work through the UI', async () => {
+  const { mkdirSync, writeFileSync: wf, readFileSync: rf } = await import('node:fs')
+  const dir = mkdtempSync(join(tmpdir(), 'cf-wl-'))
+  const wlPath = join(dir, 'watchlist.json')
+  mkdirSync(dir, { recursive: true })
+  wf(wlPath, JSON.stringify({ follow: [] }))
+  process.env.WATCHLIST_PATH = wlPath
+
+  const { ui, base, token } = await boot()
+  try {
+    const added = await (await fetch(`${base}/api/follow?token=${token}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Nancy Pelosi', bioGuideId: 'P000197' })
+    })).json()
+    assert.equal(added.ok, true)
+    assert.equal(JSON.parse(rf(wlPath, 'utf8')).follow.length, 1)
+
+    const removed = await (await fetch(`${base}/api/unfollow?token=${token}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Nancy Pelosi', bioGuideId: 'P000197' })
+    })).json()
+    assert.equal(removed.removed, true)
+    assert.equal(JSON.parse(rf(wlPath, 'utf8')).follow.length, 0)
+  } finally { ui.close(); delete process.env.WATCHLIST_PATH }
+})
