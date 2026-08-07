@@ -4,6 +4,7 @@ import { Engine } from '../src/engine.js'
 import { QuiverClient } from '../src/quiver.js'
 import { PublicClient } from '../src/public-client.js'
 import { UiServer } from '../src/ui-server.js'
+import { openBrowser } from '../src/open-browser.js'
 import { config } from '../src/config.js'
 import { log } from '../src/log.js'
 import { SECRET_VARS, storeSecret, deleteSecret, describeSecrets, doctor, readHidden, keychainName, keychainAvailable, selfTest } from '../src/secrets.js'
@@ -197,9 +198,11 @@ async function main () {
       banner()
       const ui = new UiServer({ port: Number(args[0]) || undefined })
       const url = await ui.listen()
-      console.log('\nControl panel ready. Open this URL:\n')
-      console.log('  ' + url + '\n')
-      console.log('Bound to 127.0.0.1 only, and the token above is required on every request,')
+      const opened = flags.has('--no-open') ? false : openBrowser(url)
+      console.log(opened ? '\nControl panel ready — opening your browser.' : '\nControl panel ready.')
+      console.log('\n  ' + url + '\n')
+      if (opened) console.log('If the browser did not open, paste that URL yourself.')
+      console.log('Bound to 127.0.0.1 only, and the token is required on every request,')
       console.log('so nothing else on your network or in another browser tab can reach it.')
       console.log('The token changes each time you start it. Ctrl-C to stop.')
       break
@@ -266,7 +269,7 @@ async function main () {
       console.log(`congress-follow - queue congressional-disclosure trades for manual approval on Public.com
 
 Usage:
-  congress-follow ui [port]            Open the approval control panel in a browser
+  congress-follow ui [port]            Open the approval control panel (--no-open to skip launching)
   congress-follow poll                 Fetch new disclosures and queue matching trades
   congress-follow watch                Poll on a loop (POLL_MINUTES, default 60)
   congress-follow pending [--verbose]  List orders awaiting approval

@@ -122,3 +122,23 @@ test('a positions error is surfaced as a banner, not swallowed', async () => {
   for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r))
   assert.match(el('banner').innerHTML, /Positions unavailable/)
 })
+
+// ---- browser launch ----
+test('the browser command is correct per platform', async () => {
+  const { browserCommand } = await import('../src/open-browser.js')
+  const url = 'http://127.0.0.1:8787/?token=abc123'
+
+  const win = browserCommand(url, 'win32')
+  assert.equal(win.cmd, 'cmd')
+  // The empty title argument matters: without it `start` treats the quoted URL
+  // as the window title and opens nothing.
+  assert.deepEqual(win.args, ['/c', 'start', '', url])
+
+  assert.deepEqual(browserCommand(url, 'darwin'), { cmd: 'open', args: [url] })
+  assert.deepEqual(browserCommand(url, 'linux'), { cmd: 'xdg-open', args: [url] })
+})
+
+test('the launch never throws, so a missing opener cannot kill the server', async () => {
+  const { openBrowser } = await import('../src/open-browser.js')
+  assert.doesNotThrow(() => openBrowser('http://127.0.0.1:1/?token=x'))
+})
