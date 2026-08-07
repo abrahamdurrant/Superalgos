@@ -10,7 +10,7 @@
     "congress-follow": "./bin/cli.js"
   },
   "scripts": {
-    "test": "node --test test/engine.test.js test/secrets.test.js test/quiver.test.js",
+    "test": "node --test test/engine.test.js test/secrets.test.js test/quiver.test.js test/audit-regressions.test.js",
     "start": "node bin/cli.js watch",
     "poll": "node bin/cli.js poll",
     "pending": "node bin/cli.js pending"

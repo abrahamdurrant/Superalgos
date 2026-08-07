@@ -79,7 +79,7 @@ async function main () {
       for (const id of targets) {
         try {
           const { order, dryRun } = await engine.approve(id, { force: flags.has('--force') })
-          console.log(`${dryRun ? 'DRY_RUN' : 'SUBMITTED'}: ${order.side} ${order.ticker} (${order.id.slice(0, 8)})`)
+          console.log(`${dryRun ? 'DRY_RUN (still pending)' : 'SUBMITTED'}: ${order.side} ${order.ticker} (${order.id.slice(0, 8)})`)
         } catch (err) {
           console.error(`SKIPPED ${id.slice(0, 8)}: ${err.message}`)
         }

@@ -72,20 +72,25 @@ export function sizeNotional (trade, sizing, followEntry) {
 export function evaluateTrade (trade, watchlist, { now = new Date() } = {}) {
   const { rules, sizing } = watchlist
   const key = tradeKey(trade)
-  const skip = reason => ({ key, trade, action: 'SKIP', reason })
+  // `permanent` decides whether the disclosure is remembered forever. A skip
+  // caused by config (watchlist, allow/blocklist, sides) or by time (a lag that
+  // has not yet reached the minimum) must be re-evaluated on a later poll,
+  // otherwise editing the watchlist is retroactively blind and
+  // minDisclosureLagDays discards the very trades it is waiting for.
+  const skip = (reason, permanent = true) => ({ key, trade, action: 'SKIP', reason, permanent })
 
   const follow = matchFollow(trade, watchlist.follow)
-  if (!follow) return skip('not on watchlist')
+  if (!follow) return skip('not on watchlist', false)
 
   const side = classifySide(trade.Transaction)
   if (!side) return skip(`unhandled transaction type "${trade.Transaction}"`)
-  if (!rules.sides.includes(side)) return skip(`${side} disabled in rules.sides`)
+  if (!rules.sides.includes(side)) return skip(`${side} disabled in rules.sides`, false)
 
   const ticker = String(trade.Ticker || '').trim().toUpperCase()
   if (!ticker) return skip('no ticker on disclosure')
-  if (rules.tickerBlocklist.map(s => s.toUpperCase()).includes(ticker)) return skip('ticker blocklisted')
+  if (rules.tickerBlocklist.map(s => s.toUpperCase()).includes(ticker)) return skip('ticker blocklisted', false)
   if (rules.tickerAllowlist.length > 0 && !rules.tickerAllowlist.map(s => s.toUpperCase()).includes(ticker)) {
-    return skip('ticker not on allowlist')
+    return skip('ticker not on allowlist', false)
   }
 
   // TickerType filters out options, bonds and other non-equity filings that the
@@ -100,7 +105,7 @@ export function evaluateTrade (trade, watchlist, { now = new Date() } = {}) {
   const transactionDate = parseDate(trade.TransactionDate)
   const lagDays = daysBetween(transactionDate, now)
   if (lagDays == null) return skip('unparseable TransactionDate')
-  if (lagDays < rules.minDisclosureLagDays) return skip(`disclosure lag ${lagDays}d below minimum`)
+  if (lagDays < rules.minDisclosureLagDays) return skip(`disclosure lag ${lagDays}d below minimum`, false)
   if (lagDays > rules.maxDisclosureLagDays) return skip(`disclosure lag ${lagDays}d exceeds maximum ${rules.maxDisclosureLagDays}d`)
 
   return {

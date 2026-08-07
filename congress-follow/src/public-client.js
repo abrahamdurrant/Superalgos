@@ -87,11 +87,24 @@ export class PublicClient {
   // Normalise the portfolio payload into { SYMBOL: quantity }.
   async getPositions () {
     const portfolio = await this.getPortfolio()
-    const raw = portfolio?.positions ?? portfolio?.equity ?? portfolio?.holdings ?? []
+    const raw = portfolio?.positions ?? portfolio?.equity ?? portfolio?.holdings ?? portfolio?.equityPositions
+
+    // Fail closed. This endpoint's shape is unverified, and silently returning {}
+    // would report a fully invested account as empty - which disables the
+    // maxOpenPositions cap and makes every held position look unsellable.
+    if (!Array.isArray(raw)) {
+      throw new Error(
+        'Could not read positions: Public returned an unrecognised portfolio shape ' +
+        `(top-level keys: ${portfolio && typeof portfolio === 'object' ? Object.keys(portfolio).slice(0, 8).join(', ') || 'none' : typeof portfolio}).\n` +
+        '  Refusing to continue rather than treat this as an empty account, which would\n' +
+        '  disable the open-position limit and block every sell.\n' +
+        '  Report the shape above so the parser can be corrected.')
+    }
+
     const positions = {}
-    for (const p of Array.isArray(raw) ? raw : []) {
+    for (const p of raw) {
       const symbol = p.symbol ?? p.instrument?.symbol
-      const qty = Number(p.quantity ?? p.shares ?? 0)
+      const qty = Number(p.quantity ?? p.shares ?? p.openQuantity ?? 0)
       if (symbol && qty) positions[symbol] = (positions[symbol] ?? 0) + qty
     }
     return positions
