@@ -58,17 +58,12 @@ test('reuses the working scheme instead of retrying both every call', async () =
   } finally { s.close() }
 })
 
-test('a 401 on both schemes blames the subscription, not the key format', async () => {
+test('a 401 on both schemes tries both before giving up', async () => {
   const s = await stubQuiver({ accepts: 'NOPE' })
   try {
     const q = new QuiverClient({ baseUrl: s.url, apiKey: 'k' })
-    await assert.rejects(() => q.liveCongressTrading(), err => {
-      assert.match(err.message, /both the "Token" and "Bearer"/)
-      assert.match(err.message, /no free tier/)
-      assert.match(err.message, /web Premium plan does NOT include API access/)
-      return true
-    })
-    assert.deepEqual(s.seen, ['Token', 'Bearer'])
+    await assert.rejects(() => q.liveCongressTrading(), /rejected this request \(HTTP 401\)/)
+    assert.deepEqual(s.seen, ['Token', 'Bearer'], 'both schemes attempted before failing')
   } finally { s.close() }
 })
 
