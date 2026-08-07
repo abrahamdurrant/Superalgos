@@ -218,8 +218,12 @@ returns a 404.
 ## Tests
 
 ```bash
-node --test 'test/*.test.js'
+npm test
 ```
+
+(`npm test` runs Node's built-in test runner against an explicit file list, so it
+works on any supported Node version and in any shell. There are still no packages
+to install — `npm` is only being used to run the script.)
 
 22 tests cover side classification, watchlist matching, lag and ticker-type filters, sizing,
 deduplication across polls, and every guardrail — with both APIs stubbed, so no keys or

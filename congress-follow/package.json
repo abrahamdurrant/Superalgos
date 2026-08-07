@@ -3,9 +3,14 @@
   "version": "0.1.0",
   "description": "Follow congressional stock disclosures from Quiver Quantitative and turn them into manually-approved orders on Public.com",
   "type": "module",
-  "engines": { "node": ">=18.17" },
-  "bin": { "congress-follow": "./bin/cli.js" },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "bin": {
+    "congress-follow": "./bin/cli.js"
+  },
   "scripts": {
+    "test": "node --test test/engine.test.js test/secrets.test.js",
     "start": "node bin/cli.js watch",
     "poll": "node bin/cli.js poll",
     "pending": "node bin/cli.js pending"
