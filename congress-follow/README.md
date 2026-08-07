@@ -18,7 +18,9 @@ free brokerage API that works with IRAs, so this tool targets Public instead.
 
 ```bash
 cd congress-follow
-cp .env.example .env                              # add your two keys
+cp .env.example .env                              # settings only - no secrets
+node bin/cli.js secrets set QUIVER_API_KEY        # keys go in the OS keychain
+node bin/cli.js secrets set PUBLIC_SECRET_KEY
 cp config/watchlist.example.json config/watchlist.json
 node bin/cli.js politicians pelosi                # look up BioGuide IDs
 node bin/cli.js poll
@@ -30,11 +32,89 @@ No dependencies — Node 18.17+ only.
 
 ### Keys
 
-| Variable | Where to get it |
+Two secrets. **Neither belongs in a file in this repo.** Store them in your OS
+keychain, where they are encrypted at rest and unlocked by your login:
+
+```bash
+node bin/cli.js secrets set QUIVER_API_KEY      # input is hidden
+node bin/cli.js secrets set PUBLIC_SECRET_KEY
+node bin/cli.js secrets                         # confirm, without revealing values
+node bin/cli.js secrets doctor                  # audit local storage
+```
+
+| Secret | Where to get it |
 | --- | --- |
 | `QUIVER_API_KEY` | <https://www.quiverquant.com/api/> (~$30/mo; Hobbyist and Trader tiers are non-commercial-use only) |
-| `PUBLIC_SECRET_KEY` | Public → Settings → Security → API |
-| `PUBLIC_ACCOUNT_ID` | Optional. Auto-discovered unless you hold more than one account — set it to pin your IRA. |
+| `PUBLIC_SECRET_KEY` | Public -> Settings -> Security -> API |
+
+`PUBLIC_ACCOUNT_ID` is an identifier, not a credential, and is fine in `.env`.
+Set it to pin your IRA if you hold more than one Public account.
+
+## Where the keys live
+
+Resolution order, most secure first. The first hit wins.
+
+| # | Source | At rest | Use when |
+| --- | --- | --- | --- |
+| 1 | `<VAR>_CMD` — a password-manager command | **Never stored on this machine** | You already use 1Password, `pass`, Bitwarden, gpg, age |
+| 2 | **OS keychain** | Encrypted by the OS, unlocked by login | Default recommendation |
+| 3 | `<VAR>` environment variable | Plaintext in the process env | Short-lived shells, CI |
+| 4 | `.env` file | **Plaintext on disk** | Discouraged — `doctor` flags it |
+
+The keychain backend is chosen per platform: **macOS Keychain** (`security`),
+**Secret Service / libsecret** on Linux (`secret-tool`, from `libsecret-tools`),
+and **DPAPI** per-user encryption on Windows. If none is present, the tool tells
+you and points at the `_CMD` route instead of silently degrading.
+
+### Pulling from a password manager (strongest option)
+
+Nothing is stored locally at all — the key is fetched fresh on each run and
+lives only in memory:
+
+```bash
+export QUIVER_API_KEY_CMD='op read op://Private/Quiver/credential'   # 1Password
+export PUBLIC_SECRET_KEY_CMD='pass show trading/public-secret'       # pass
+# also works with: bw get password <id>, gpg -d, age -d, aws secretsmanager, ...
+```
+
+### What the tool does to protect them
+
+- Secrets are passed to the keychain over **stdin**, never as command-line
+  arguments — argv is visible to any process via `ps`.
+- Terminal input is **hidden** when you run `secrets set`.
+- `secrets` prints only a **fingerprint** (`abc...yz (32 chars)`), never a usable value.
+- If a `_CMD` fails, its **stderr is not echoed** — a password manager's error output
+  can contain the secret itself.
+- Public's long-lived secret is exchanged for a **short-lived access token**
+  (`PUBLIC_TOKEN_MINUTES`, default 60), so the secret itself is rarely in flight.
+- `.env`, `config/watchlist.json` and `data/` are gitignored.
+
+### `secrets doctor`
+
+Audits the things that actually leak keys in practice:
+
+```
+[  ok  ] QUIVER_API_KEY is stored in macOS Keychain.
+[ RISK ] PUBLIC_SECRET_KEY is read from a plaintext .env file. Move it: secrets set PUBLIC_SECRET_KEY
+[ RISK ] .env is mode 644 - readable by other users. chmod 600 .env
+[ RISK ] This checkout sits inside a "Dropbox" folder - local secrets would be uploaded to that service.
+[  ok  ] .gitignore excludes .env.
+[ warn ] data/store.json is mode 644 - it records your positions and order history.
+```
+
+Exits non-zero if anything is at RISK, so you can wire it into a pre-run check.
+
+### Beyond this tool
+
+Two things worth doing that no code here can do for you:
+
+- **Scope and rotate.** Treat the Public secret key as the crown jewel: it is the
+  one credential that can move money. Rotate it from Public's API settings
+  periodically, and immediately if a machine is lost. Revoking it there
+  invalidates every token derived from it.
+- **Protect the machine.** Full-disk encryption on, and don't run this on a box
+  where anyone else has an account. A keychain protects a secret at rest; it
+  cannot protect it from someone logged in as you.
 
 ## Safety model
 
@@ -92,6 +172,10 @@ across filings, and matching on name alone can follow the wrong person.
 | `sync` | Refresh status of submitted orders |
 | `status` | Public accounts and open positions |
 | `politicians <query>` | Look up BioGuide IDs |
+| `secrets` | Show where each key resolves from |
+| `secrets set <VAR>` | Store a key in the OS keychain (hidden input) |
+| `secrets rm <VAR>` | Remove a key from the OS keychain |
+| `secrets doctor` | Audit local key storage and permissions |
 
 ## Things worth knowing before you use this
 
@@ -128,6 +212,9 @@ returns a 404.
 node --test 'test/*.test.js'
 ```
 
-14 tests cover side classification, watchlist matching, lag and ticker-type filters, sizing,
+22 tests cover side classification, watchlist matching, lag and ticker-type filters, sizing,
 deduplication across polls, and every guardrail — with both APIs stubbed, so no keys or
-network access are needed.
+network access are needed. Eight of them cover secret handling specifically: resolution
+precedence, the actionable missing-key error, and two leak regressions (a failing
+password-manager command must not echo its stderr, and `secrets` must never print a
+usable value).

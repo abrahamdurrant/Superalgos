@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { resolveSecret } from './secrets.js'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -20,6 +21,7 @@ function loadDotEnv () {
       value = value.slice(1, -1)
     }
     process.env[key] = value
+    process.env[`__${key}_FROM_DOTENV`] = '1'
   }
 }
 loadDotEnv()
@@ -59,12 +61,6 @@ export function loadWatchlist (path = process.env.WATCHLIST_PATH || resolve(root
   }
 }
 
-function required (name) {
-  const value = process.env[name]
-  if (!value) throw new Error(`Missing required environment variable ${name}. See .env.example.`)
-  return value
-}
-
 export const config = {
   root,
   storePath: process.env.STORE_PATH || resolve(root, 'data/store.json'),
@@ -73,11 +69,11 @@ export const config = {
   get dryRun () { return (process.env.DRY_RUN ?? 'true').toLowerCase() !== 'false' },
   quiver: {
     baseUrl: process.env.QUIVER_BASE_URL || 'https://api.quiverquant.com',
-    get apiKey () { return required('QUIVER_API_KEY') }
+    get apiKey () { return resolveSecret('QUIVER_API_KEY').value }
   },
   public: {
     baseUrl: process.env.PUBLIC_BASE_URL || 'https://api.public.com',
-    get secretKey () { return required('PUBLIC_SECRET_KEY') },
+    get secretKey () { return resolveSecret('PUBLIC_SECRET_KEY').value },
     accountId: process.env.PUBLIC_ACCOUNT_ID || null,
     tokenValidityMinutes: Number(process.env.PUBLIC_TOKEN_MINUTES || 60)
   }

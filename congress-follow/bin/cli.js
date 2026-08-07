@@ -1,9 +1,11 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs'
 import { Engine } from '../src/engine.js'
 import { QuiverClient } from '../src/quiver.js'
 import { PublicClient } from '../src/public-client.js'
 import { config } from '../src/config.js'
 import { log } from '../src/log.js'
+import { SECRET_VARS, storeSecret, deleteSecret, describeSecrets, doctor, readHidden, keychainName, keychainAvailable } from '../src/secrets.js'
 
 const [, , command, ...rest] = process.argv
 const flags = new Set(rest.filter(a => a.startsWith('--')))
@@ -114,6 +116,53 @@ async function main () {
       break
     }
 
+    case 'secrets': {
+      const sub = args[0]
+      const varName = args[1]?.toUpperCase()
+      const known = Object.keys(SECRET_VARS)
+
+      if (sub === 'set') {
+        if (!known.includes(varName)) throw new Error(`Unknown secret "${args[1] ?? ''}". One of: ${known.join(', ')}`)
+        if (!keychainAvailable()) {
+          throw new Error(`No OS keychain found on this system.\n  Use a password manager instead, e.g.:\n    export ${varName}_CMD='op read op://Private/Item/credential'`)
+        }
+        // --stdin lets you pipe from another tool without the value hitting the screen.
+        const value = flags.has('--stdin')
+          ? readFileSync(0, 'utf8').trim()
+          : readHidden(`Paste ${SECRET_VARS[varName].label} (input hidden): `)
+        if (!value) throw new Error('No value provided.')
+        storeSecret(varName, value)
+        console.log(`Stored ${varName} in ${keychainName()}.`)
+        console.log('It is encrypted at rest and never written into this repo.')
+        break
+      }
+
+      if (sub === 'rm' || sub === 'delete') {
+        if (!known.includes(varName)) throw new Error(`Unknown secret "${args[1] ?? ''}". One of: ${known.join(', ')}`)
+        console.log(deleteSecret(varName) ? `Removed ${varName} from ${keychainName()}.` : `${varName} was not in ${keychainName()}.`)
+        break
+      }
+
+      if (sub === 'doctor') {
+        const findings = doctor()
+        const icon = { ok: '  ok  ', warn: ' warn ', bad: ' RISK ' }
+        for (const f of findings) console.log(`[${icon[f.level]}] ${f.msg}`)
+        const bad = findings.filter(f => f.level === 'bad').length
+        const warn = findings.filter(f => f.level === 'warn').length
+        console.log(`\n${findings.length} checks - ${bad} risk(s), ${warn} warning(s).`)
+        if (bad > 0) process.exitCode = 1
+        break
+      }
+
+      // default: status
+      console.log(`Keychain backend: ${keychainName()}${keychainAvailable() ? '' : ' (unavailable)'}\n`)
+      for (const s of describeSecrets()) {
+        console.log(`${s.varName.padEnd(20)} ${s.configured ? 'configured' : 'MISSING   '}  ${s.source ?? ''} ${s.fingerprint ? `[${s.fingerprint}]` : ''}`)
+      }
+      console.log(`\nSet one with: congress-follow secrets set <VAR>`)
+      break
+    }
+
     case 'politicians': {
       const quiver = new QuiverClient()
       const roster = await quiver.politicians()
@@ -140,6 +189,12 @@ Usage:
   congress-follow sync                 Refresh status of submitted orders
   congress-follow status               Show Public accounts and open positions
   congress-follow politicians <query>  Look up BioGuide IDs for your watchlist
+
+Secrets:
+  congress-follow secrets              Show where each key resolves from
+  congress-follow secrets set <VAR>    Store a key in the OS keychain (hidden input)
+  congress-follow secrets rm <VAR>     Remove a key from the OS keychain
+  congress-follow secrets doctor       Audit local key storage and file permissions
 
 Safety: DRY_RUN defaults to true. Nothing reaches Public until you set DRY_RUN=false.`)
   }
