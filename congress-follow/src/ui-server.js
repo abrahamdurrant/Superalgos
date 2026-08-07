@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
-import { config } from './config.js'
+import { DATASETS } from './datasets.js'
 import { Engine } from './engine.js'
 import { log } from './log.js'
 import { renderPage } from './ui-page.js'
@@ -54,7 +54,12 @@ export class UiServer {
       positionsError = err.message
     }
     return {
-      dryRun: config.dryRun,
+      dryRun: this.engine.isDryRun,
+      dryRunForcedByEnv: this.engine.settings.dryRunForcedByEnv,
+      settings: this.engine.settings.data,
+      datasetCatalog: DATASETS.map(d => ({ id: d.id, label: d.label, plan: d.plan })),
+      datasetStatus: this.engine.datasetStatus,
+      allocationsLoaded: this.engine.allocations ? this.engine.allocations.byPolitician.size : null,
       accountId: this.engine.broker.accountId,
       guardrails: this.engine.watchlist.guardrails,
       following: this.engine.watchlist.follow.map(f => ({ name: f.name, bioGuideId: f.bioGuideId, weight: f.weight ?? 1 })),
@@ -101,6 +106,36 @@ export class UiServer {
     if (req.method === 'POST' && url.pathname === '/api/preview') {
       return this.engine.preview()
         .then(r => send(200, r))
+        .catch(e => send(500, { error: e.message }))
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/settings') {
+      return this.#readJson(req)
+        .then(patch => {
+          const data = this.engine.settings.update(patch)
+          // Reloading allocations matters when the sizing basis changes.
+          if (patch.sizing?.mode === 'mirror') this.engine.loadAllocations({ force: true }).catch(() => {})
+          return send(200, { ok: true, settings: data })
+        })
+        .catch(e => send(400, { error: e.message }))
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/amend') {
+      return this.#readJson(req)
+        .then(b => this.engine.amend(b.id, b))
+        .then(o => send(200, { ok: true, order: o }))
+        .catch(e => send(400, { error: e.message }))
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/automate') {
+      return this.engine.runAutomation()
+        .then(r => send(200, r))
+        .catch(e => send(500, { error: e.message }))
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/accounts') {
+      return this.engine.broker.getAccounts()
+        .then(a => send(200, { accounts: a }))
         .catch(e => send(500, { error: e.message }))
     }
 

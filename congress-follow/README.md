@@ -168,6 +168,59 @@ across filings, and matching on name alone can follow the wrong person.
 
 `weight` scales position size per politician, so you can follow someone at half size.
 
+## Control panel
+
+```bash
+node bin/cli.js ui
+```
+
+Prints a localhost URL carrying a one-time token. The panel covers approvals,
+per-order edits, settings, and what is being filtered out.
+
+### Portfolio-mirror sizing
+
+With `sizing.mode = "mirror"`, position size copies the **allocation** rather
+than the trade: if a politician holds 30% of their disclosed portfolio in NVDA
+and your capital base is $20,000, the order is $6,000. Weights come from
+Quiver's `congressholdings`, clamped by your min and max per trade.
+
+If an allocation cannot be determined - no disclosed holdings, or no position in
+that ticker - the order falls back to the flat size and says so on the row. It
+is never silently sized to zero.
+
+### Assigning trades
+
+Each queued order can be routed and resized before approval:
+
+- **Account** - send it to your IRA or your taxable account, per order
+- **Bucket** - tag it to a named strategy with its own capital and account route
+- **Size override** - type a dollar amount that replaces the computed size
+
+Overrides are still subject to every guardrail.
+
+### Automation
+
+Automation polls and submits everything that passes the guardrails, with no
+click. It is off by default, and while live it refuses to run until at least one
+order has been submitted successfully by hand.
+
+That gate exists because `placeOrder` has never executed against real Public
+infrastructure. An unattended loop is a poor way to discover an order body is
+wrong. Clear it in Settings once you have placed one order yourself.
+
+## Datasets
+
+| Dataset | Plan |
+| --- | --- |
+| Congress trading | Hobbyist |
+| Senate trading | Hobbyist |
+| House trading | Hobbyist |
+| Corporate insiders (Form 4) | **Trader ($75/mo)** |
+
+Enable them per dataset in Settings. One your plan does not cover is reported as
+unavailable next to its toggle - it does not fail the poll or look like a broken
+key.
+
 ## Commands
 
 | Command | What it does |
@@ -181,6 +234,8 @@ across filings, and matching on name alone can follow the wrong person.
 | `sync` | Refresh status of submitted orders |
 | `status` | Public accounts and open positions |
 | `politicians <query>` | Look up BioGuide IDs |
+| `ui [port]` | Open the control panel |
+| `quiver-check` | Probe each Quiver endpoint and diagnose a 401 |
 | `secrets` | Show where each key resolves from |
 | `secrets set <VAR>` | Store a key in the OS keychain (hidden input) |
 | `secrets rm <VAR>` | Remove a key from the OS keychain |

@@ -43,13 +43,21 @@ async function main () {
 
     case 'watch': {
       banner()
-      const minutes = Number(process.env.POLL_MINUTES || 60)
       const engine = new Engine()
+      const auto = engine.settings.data.automation ?? {}
+      const minutes = Number(process.env.POLL_MINUTES || auto.pollMinutes || 60)
       const tick = async () => {
-        try { await engine.poll() } catch (err) { log.error(`Poll failed: ${err.message}`) }
+        try {
+          if (auto.enabled) {
+            const r = await engine.runAutomation()
+            if (!r.ran) log.warn(`Automation did not run: ${r.reason}`)
+          } else {
+            await engine.poll()
+          }
+        } catch (err) { log.error(`Tick failed: ${err.message}`) }
       }
       await tick()
-      log.info(`Watching. Polling every ${minutes} minute(s). Ctrl-C to stop.`)
+      log.info(`Watching. ${(engine.settings.data.automation ?? {}).enabled ? 'Automation ON' : 'Queue only'}; every ${minutes} minute(s). Ctrl-C to stop.`)
       setInterval(tick, minutes * 60_000)
       break
     }

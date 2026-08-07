@@ -131,6 +131,17 @@ export class QuiverClient {
   }
 
   // GET /beta/bulk/congress/politicians -> roster, used to resolve names to BioGuide IDs.
+  /** Fetch any dataset path and return its rows, whatever envelope it uses. */
+  async fetchDataset (path, params = {}) {
+    const body = await this.#get(path, params)
+    return this.#rows(body, path)
+  }
+
+  /** Disclosed portfolio holdings, used for allocation-mirroring sizing. */
+  async congressHoldings () {
+    return this.fetchDataset('/beta/live/congressholdings')
+  }
+
   async politicians () {
     // Verified against the live API: this endpoint wraps rows in {"data": [...]}.
     const body = await this.#get('/beta/bulk/congress/politicians', {})

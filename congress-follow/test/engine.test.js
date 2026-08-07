@@ -49,6 +49,9 @@ function newStore () {
 class FakeQuiver {
   constructor (rows) { this.rows = rows }
   async liveCongressTrading () { return this.rows }
+  // The engine now fetches through the dataset layer.
+  async fetchDataset (path) { return path.includes('congresstrading') ? this.rows : [] }
+  async congressHoldings () { return [] }
 }
 
 class FakeBroker extends PublicClient {

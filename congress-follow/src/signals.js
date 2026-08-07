@@ -8,8 +8,31 @@ const SELL_WORDS = ['sale', 'sold', 'sale (partial)', 'sale (full)']
  * fields that together identify one filing line. Used to guarantee we never queue
  * the same disclosure twice, even across restarts.
  */
+/**
+ * Field accessors that tolerate either shape: the normalised rows produced by
+ * src/datasets.js, or raw Quiver congress rows. Keeping both readable avoids a
+ * flag day across the evaluator and its tests.
+ */
+export const f = {
+  actor: t => t.actor ?? t.Representative ?? t.Senator ?? t.Name,
+  actorId: t => t.actorId ?? t.BioGuideID,
+  ticker: t => t.ticker ?? t.Ticker,
+  tickerType: t => t.tickerType ?? t.TickerType,
+  transaction: t => t.transaction ?? t.Transaction,
+  amount: t => t.amount ?? t.Amount,
+  range: t => t.range ?? t.Range,
+  transactionDate: t => t.transactionDate ?? t.TransactionDate,
+  reportDate: t => t.reportDate ?? t.ReportDate,
+  party: t => t.party ?? t.Party,
+  chamber: t => t.chamber ?? t.House,
+  dataset: t => t.dataset ?? 'congresstrading'
+}
+
 export function tradeKey (t) {
-  const parts = [t.BioGuideID || t.Representative, t.Ticker, t.Transaction, t.TransactionDate, t.ReportDate, t.Amount]
+  const parts = [
+    f.dataset(t), f.actorId(t) || f.actor(t), f.ticker(t),
+    f.transaction(t), f.transactionDate(t), f.reportDate(t), f.amount(t)
+  ]
   return createHash('sha1').update(parts.join('|')).digest('hex').slice(0, 16)
 }
 
@@ -34,8 +57,8 @@ export function classifySide (transaction) {
 
 /** Match a disclosure against the watchlist, by BioGuide ID first then name. */
 export function matchFollow (trade, follow) {
-  const id = String(trade.BioGuideID || '').trim().toUpperCase()
-  const name = String(trade.Representative || '').trim().toLowerCase()
+  const id = String(f.actorId(trade) || '').trim().toUpperCase()
+  const name = String(f.actor(trade) || '').trim().toLowerCase()
   return follow.find(f => {
     if (f.bioGuideId && id && String(f.bioGuideId).trim().toUpperCase() === id) return true
     if (f.bioGuideId && id) return false // ID present on both sides and mismatched
@@ -44,7 +67,7 @@ export function matchFollow (trade, follow) {
 }
 
 function reportedAmount (trade) {
-  const n = Number(String(trade.Amount ?? '').replace(/[$,]/g, ''))
+  const n = Number(String(f.amount(trade) ?? '').replace(/[$,]/g, ''))
   return Number.isFinite(n) ? n : 0
 }
 
@@ -79,14 +102,18 @@ export function evaluateTrade (trade, watchlist, { now = new Date() } = {}) {
   // minDisclosureLagDays discards the very trades it is waiting for.
   const skip = (reason, permanent = true) => ({ key, trade, action: 'SKIP', reason, permanent })
 
+  if (rules.datasets && rules.datasets[f.dataset(trade)] === false) {
+    return skip(`dataset ${f.dataset(trade)} disabled`, false)
+  }
+
   const follow = matchFollow(trade, watchlist.follow)
   if (!follow) return skip('not on watchlist', false)
 
-  const side = classifySide(trade.Transaction)
-  if (!side) return skip(`unhandled transaction type "${trade.Transaction}"`)
+  const side = classifySide(f.transaction(trade))
+  if (!side) return skip(`unhandled transaction type "${f.transaction(trade)}"`)
   if (!rules.sides.includes(side)) return skip(`${side} disabled in rules.sides`, false)
 
-  const ticker = String(trade.Ticker || '').trim().toUpperCase()
+  const ticker = String(f.ticker(trade) || '').trim().toUpperCase()
   if (!ticker) return skip('no ticker on disclosure')
   if (rules.tickerBlocklist.map(s => s.toUpperCase()).includes(ticker)) return skip('ticker blocklisted', false)
   if (rules.tickerAllowlist.length > 0 && !rules.tickerAllowlist.map(s => s.toUpperCase()).includes(ticker)) {
@@ -95,14 +122,14 @@ export function evaluateTrade (trade, watchlist, { now = new Date() } = {}) {
 
   // TickerType filters out options, bonds and other non-equity filings that the
   // EQUITY order path cannot represent.
-  const tickerType = String(trade.TickerType || '').trim().toUpperCase()
+  const tickerType = String(f.tickerType(trade) || '').trim().toUpperCase()
   if (rules.allowedTickerTypes.length > 0 && tickerType && !rules.allowedTickerTypes.includes(tickerType)) {
     return skip(`ticker type ${tickerType} not tradeable as equity`)
   }
 
   // The STOCK Act allows up to 45 days before disclosure, so every row is already
   // stale. maxDisclosureLagDays stops us acting on genuinely ancient filings.
-  const transactionDate = parseDate(trade.TransactionDate)
+  const transactionDate = parseDate(f.transactionDate(trade))
   const lagDays = daysBetween(transactionDate, now)
   if (lagDays == null) return skip('unparseable TransactionDate')
   if (lagDays < rules.minDisclosureLagDays) return skip(`disclosure lag ${lagDays}d below minimum`, false)
@@ -117,7 +144,10 @@ export function evaluateTrade (trade, watchlist, { now = new Date() } = {}) {
     lagDays,
     reportedAmount: reportedAmount(trade),
     notionalUsd: side === 'BUY' ? sizeNotional(trade, sizing, follow) : null,
-    sellMode: side === 'SELL' ? sizing.sellMode : null
+    sellMode: side === 'SELL' ? sizing.sellMode : null,
+    dataset: f.dataset(trade),
+    bucket: follow.bucket ?? null,
+    accountId: follow.accountId ?? null
   }
 }
 

@@ -3,15 +3,76 @@ import { config, loadWatchlist } from './config.js'
 import { QuiverClient } from './quiver.js'
 import { PublicClient } from './public-client.js'
 import { Store } from './store.js'
-import { evaluateAll, tradeKey } from './signals.js'
+import { evaluateAll, tradeKey, f } from './signals.js'
+import { Settings } from './settings.js'
+import { fetchEnabled } from './datasets.js'
+import { buildAllocations, mirrorSize } from './holdings.js'
 import { log } from './log.js'
 
 export class Engine {
-  constructor ({ store, quiver, broker, watchlist } = {}) {
+  constructor ({ store, quiver, broker, watchlist, settings } = {}) {
     this.watchlist = watchlist ?? loadWatchlist()
     this.store = store ?? new Store(config.storePath)
     this.quiver = quiver ?? new QuiverClient()
     this.broker = broker ?? new PublicClient()
+    this.settings = settings ?? new Settings()
+    this.datasetStatus = []
+    this.allocations = null
+  }
+
+  /** Settings win over the watchlist file for anything the UI can change. */
+  get sizingConfig () {
+    return { ...this.watchlist.sizing, ...this.settings.data.sizing }
+  }
+
+  get isDryRun () {
+    // The environment override is authoritative; see Settings.load().
+    return this.settings.dryRun
+  }
+
+  /** Load disclosed portfolios so allocations can be mirrored. */
+  async loadAllocations ({ force = false } = {}) {
+    if (this.allocations && !force) return this.allocations
+    try {
+      const rows = await this.quiver.congressHoldings()
+      this.allocations = buildAllocations(rows)
+      this.allocations.fetchedAt = new Date().toISOString()
+    } catch (err) {
+      log.warn(`Could not load holdings for allocation sizing: ${err.message.split('\n')[0]}`)
+      this.allocations = { byPolitician: new Map(), unparsed: [], error: err.message.split('\n')[0] }
+    }
+    return this.allocations
+  }
+
+  /**
+   * Resolve the dollar size for a BUY, honouring the selected sizing mode.
+   * Returns { notionalUsd, sizeSource, sizeNote } - never silently zero.
+   */
+  #resolveSize (signal) {
+    const sizing = this.sizingConfig
+    if (sizing.mode !== 'mirror') {
+      return { notionalUsd: signal.notionalUsd, sizeSource: sizing.mode, sizeNote: null }
+    }
+    const bucket = signal.bucket ? this.settings.data.buckets?.[signal.bucket] : null
+    const capitalUsd = bucket?.capitalUsd ?? sizing.capitalUsd
+    const r = mirrorSize({
+      actor: signal.trade && f.actor(signal.trade),
+      ticker: signal.ticker,
+      allocations: this.allocations,
+      capitalUsd,
+      weight: signal.follow?.weight ?? 1,
+      minNotionalUsd: sizing.minNotionalUsd ?? 0,
+      maxNotionalUsd: sizing.maxNotionalUsd ?? Infinity
+    })
+    if (r.notionalUsd == null) {
+      // Fall back to the flat size rather than queueing a zero-dollar order.
+      return {
+        notionalUsd: signal.notionalUsd,
+        sizeSource: 'fixed-fallback',
+        sizeNote: `mirror unavailable: ${r.reason}`
+      }
+    }
+    return { notionalUsd: r.notionalUsd, sizeSource: 'mirror', sizeNote: `${r.basis.allocationPct}% of their portfolio x $${r.basis.capitalUsd}`, sizeBasis: r.basis }
   }
 
   /**
@@ -22,22 +83,27 @@ export class Engine {
    * poll commits any of it to the store.
    */
   async preview () {
-    const trades = await this.quiver.liveCongressTrading({ normalized: true })
-    const { signals, skipped } = evaluateAll(trades, this.watchlist)
+    const { rows: trades, status } = await fetchEnabled(this.quiver, { ...this.settings.data.datasets })
+    this.datasetStatus = status
+    if (this.sizingConfig.mode === 'mirror') await this.loadAllocations()
+    const wl = { ...this.watchlist, rules: { ...this.watchlist.rules, datasets: this.settings.data.datasets } }
+    const { signals, skipped } = evaluateAll(trades, wl)
     const seen = t => this.store.hasSeen(tradeKey(t))
     return {
       total: trades.length,
       wouldQueue: signals.filter(s => !seen(s.trade)),
       alreadyHandled: signals.filter(s => seen(s.trade)),
+      datasets: status,
       filtered: skipped.map(s => ({
         reason: s.reason,
         reconsiderable: s.permanent === false,
-        ticker: s.trade.Ticker,
-        politician: s.trade.Representative,
-        transaction: s.trade.Transaction,
-        range: s.trade.Range,
-        transactionDate: s.trade.TransactionDate,
-        reportDate: s.trade.ReportDate
+        dataset: f.dataset(s.trade),
+        ticker: f.ticker(s.trade),
+        politician: f.actor(s.trade),
+        transaction: f.transaction(s.trade),
+        range: f.range(s.trade),
+        transactionDate: f.transactionDate(s.trade),
+        reportDate: f.reportDate(s.trade)
       }))
     }
   }
@@ -47,11 +113,16 @@ export class Engine {
    * Nothing is sent to the broker here - approval is a separate, explicit step.
    */
   async poll () {
-    const trades = await this.quiver.liveCongressTrading({ normalized: true })
-    log.info(`Fetched ${trades.length} disclosed trades from Quiver`)
+    const enabled = { ...this.settings.data.datasets }
+    const { rows: trades, status } = await fetchEnabled(this.quiver, enabled)
+    this.datasetStatus = status
+    const okCount = status.filter(s => s.ok).length
+    log.info(`Fetched ${trades.length} rows from ${okCount}/${status.length} dataset(s)`)
+    if (this.sizingConfig.mode === 'mirror') await this.loadAllocations()
 
     const fresh = trades.filter(t => !this.store.hasSeen(tradeKey(t)))
-    const { signals, skipped } = evaluateAll(fresh, this.watchlist)
+    const wl = { ...this.watchlist, rules: { ...this.watchlist.rules, datasets: this.settings.data.datasets } }
+    const { signals, skipped } = evaluateAll(fresh, wl)
 
     const queued = []
     this.store.withLock(store => {
@@ -71,18 +142,24 @@ export class Engine {
           tradeKey: signal.key,
           side: signal.action,
           ticker: signal.ticker,
-          notionalUsd: signal.notionalUsd,
+          ...(signal.action === 'BUY' ? this.#resolveSize(signal) : { notionalUsd: null, sizeSource: null, sizeNote: null }),
           sellMode: signal.sellMode,
-          politician: signal.trade.Representative,
-          bioGuideId: signal.trade.BioGuideID,
-          party: signal.trade.Party,
-          chamber: signal.trade.House,
-          transactionDate: signal.trade.TransactionDate,
-          reportDate: signal.trade.ReportDate,
-          reportedRange: signal.trade.Range,
+          dataset: signal.dataset,
+          bucket: signal.bucket,
+          accountId: signal.accountId
+            ?? (signal.bucket ? this.settings.data.routing?.byBucket?.[signal.bucket] : null)
+            ?? this.settings.data.routing?.defaultAccountId
+            ?? null,
+          politician: f.actor(signal.trade),
+          bioGuideId: f.actorId(signal.trade),
+          party: f.party(signal.trade),
+          chamber: f.chamber(signal.trade),
+          transactionDate: f.transactionDate(signal.trade),
+          reportDate: f.reportDate(signal.trade),
+          reportedRange: f.range(signal.trade),
           reportedAmount: signal.reportedAmount,
           lagDays: signal.lagDays,
-          source: 'quiver/live/congresstrading'
+          source: `quiver/${signal.dataset}`
         }
         store.putOrder(order)
         store.markSeen(signal.key, { outcome: 'QUEUED', orderId: order.id })
@@ -100,8 +177,12 @@ export class Engine {
     const g = this.watchlist.guardrails
     const problems = []
 
-    if (order.side === 'BUY' && order.notionalUsd > g.maxNotionalPerTrade) {
-      problems.push(`notional $${order.notionalUsd} exceeds maxNotionalPerTrade $${g.maxNotionalPerTrade}`)
+    const notional = order.sizeOverrideUsd ?? order.notionalUsd
+    if (order.side === 'BUY' && notional > g.maxNotionalPerTrade) {
+      problems.push(`notional $${notional} exceeds maxNotionalPerTrade $${g.maxNotionalPerTrade}`)
+    }
+    if (order.side === 'BUY' && !(notional > 0)) {
+      problems.push('no size resolved for this order')
     }
 
     const todayStart = new Date().toISOString().slice(0, 10)
@@ -155,10 +236,13 @@ export class Engine {
     if (problems.length > 0) log.warn('Guardrails overridden with --force', { problems })
 
     const brokerOrderId = order.brokerOrderId ?? randomUUID()
+    // A per-order override beats the computed size; a per-order account beats
+    // the bucket route, which beats the default.
+    const notional = order.sizeOverrideUsd ?? order.notionalUsd
     let body
     if (order.side === 'BUY') {
       body = this.broker.buildOrderBody({
-        orderId: brokerOrderId, symbol: order.ticker, side: 'BUY', amount: order.notionalUsd
+        orderId: brokerOrderId, symbol: order.ticker, side: 'BUY', amount: notional
       })
     } else {
       const held = positions[order.ticker] ?? 0
@@ -169,7 +253,7 @@ export class Engine {
       })
     }
 
-    if (config.dryRun) {
+    if (this.isDryRun) {
       // Deliberately leave the order PENDING. Marking it consumed would make the
       // documented workflow - dry-run first, then flip DRY_RUN=false - place
       // nothing at all, because approve() only accepts PENDING and poll() will
@@ -198,7 +282,7 @@ export class Engine {
 
     let response
     try {
-      response = await this.broker.placeOrder(body)
+      response = await this.broker.placeOrder(body, { accountId: order.accountId ?? undefined })
     } catch (err) {
       // The request may still have reached the broker. Never silently revert to
       // PENDING - that invites a duplicate submission under a fresh key.
@@ -228,6 +312,46 @@ export class Engine {
     return { order: saved, dryRun: false, body, response }
   }
 
+  /**
+   * One automation cycle: poll, then submit everything that passes the
+   * guardrails. Returns a report rather than throwing, so a single bad order
+   * cannot stop the rest.
+   *
+   * Automation is gated on placeOrder having succeeded at least once. That path
+   * has never run against real Public infrastructure, and a first execution
+   * discovered by an unattended loop is a bad way to find out it is wrong.
+   * Clear the gate in Settings once you have submitted one order by hand.
+   */
+  async runAutomation () {
+    const auto = this.settings.data.automation ?? {}
+    if (!auto.enabled) return { ran: false, reason: 'automation disabled' }
+
+    if (!this.isDryRun && auto.requireProvenSubmitPath) {
+      const proven = this.store.reload().listOrders()
+        .some(o => o.brokerResponse && ['SUBMITTED', 'FILLED', 'CLOSED'].includes(o.status))
+      if (!proven) {
+        return {
+          ran: false,
+          reason: 'No order has ever been submitted successfully, so the submit path is unproven. ' +
+                  'Approve one manually first, or turn off requireProvenSubmitPath in Settings.'
+        }
+      }
+    }
+
+    const polled = await this.poll()
+    const results = []
+    for (const order of this.store.reload().listOrders('PENDING')) {
+      try {
+        const r = await this.approve(order.id)
+        results.push({ id: order.id, ticker: order.ticker, side: order.side, ok: true, dryRun: r.dryRun })
+      } catch (err) {
+        results.push({ id: order.id, ticker: order.ticker, side: order.side, ok: false, error: err.message.split('\n')[0] })
+      }
+    }
+    log.info(`Automation: queued ${polled.queued.length}, submitted ${results.filter(r => r.ok).length}, blocked ${results.filter(r => !r.ok).length}`)
+    return { ran: true, queued: polled.queued.length, results }
+  }
+
   reject (orderId, reason = 'rejected by user') {
     const order = this.store.getOrder(orderId)
     if (!order) throw new Error(`No order matching "${orderId}".`)
@@ -243,6 +367,25 @@ export class Engine {
   }
 
   /** Refresh the broker-side status of everything we have submitted. */
+  /** Adjust a pending order before approval: size, destination account, bucket. */
+  amend (orderId, { sizeOverrideUsd, accountId, bucket } = {}) {
+    return this.store.withLock(store => {
+      const o = store.getOrder(orderId)
+      if (!o) throw new Error(`No order matching "${orderId}".`)
+      if (o.status !== 'PENDING') throw new Error(`Order ${o.id} is ${o.status}, not PENDING.`)
+      if (sizeOverrideUsd !== undefined) {
+        const n = sizeOverrideUsd === null ? null : Number(sizeOverrideUsd)
+        if (n !== null && !(Number.isFinite(n) && n > 0)) throw new Error('Size override must be a positive number.')
+        o.sizeOverrideUsd = n
+      }
+      if (accountId !== undefined) o.accountId = accountId || null
+      if (bucket !== undefined) o.bucket = bucket || null
+      o.amendedAt = new Date().toISOString()
+      store.putOrder(o)
+      return o
+    })
+  }
+
   async sync () {
     // SUBMITTING and NEEDS_REVIEW are in-flight or unresolved: they carry a
     // brokerOrderId and must be chased, not ignored.

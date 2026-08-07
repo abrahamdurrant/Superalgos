@@ -52,6 +52,17 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:
 .tabs{display:flex;gap:5px;padding:9px 15px;border-bottom:1px solid var(--line)}
 .tabs button{font-size:12px;padding:4px 11px}
 .tabs button[aria-selected=true]{background:var(--accent);color:#fff;border-color:var(--accent)}
+.fld{margin:12px 0}
+.fld label{display:block;font-size:12px;font-weight:600;margin-bottom:4px}
+.fld .hint{color:var(--muted);font-size:12px;margin-top:3px}
+input,select{font:inherit;padding:6px 9px;border-radius:7px;border:1px solid var(--line);background:var(--bg);color:var(--ink);width:100%}
+input[type=checkbox]{width:auto;margin-right:7px}
+.row{display:flex;gap:10px;flex-wrap:wrap}.row>*{flex:1;min-width:150px}
+.danger-zone{border:1px solid var(--live);border-radius:8px;padding:11px;margin-top:14px;background:var(--livebg)}
+.mini{font-size:12px;padding:3px 7px}
+.ovr{width:88px;display:inline-block}
+.ds{display:flex;align-items:center;gap:7px;padding:4px 0;font-size:13px}
+.ds .bad{color:var(--sell);font-size:12px}
 </style></head><body>
 <header>
   <h1>congress-follow</h1>
@@ -61,6 +72,8 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:
   <button id="poll">Fetch disclosures</button>
   <button id="prev">Preview filters</button>
   <button id="sync">Sync statuses</button>
+  <button id="auto">Run automation</button>
+  <button id="settings">Settings</button>
   <button id="refresh" class="primary">Refresh</button>
 </header>
 <main>
@@ -77,6 +90,12 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:
     <div id="pos"></div><div id="flt" hidden></div><div id="hist" hidden></div><div id="cfg" hidden></div>
   </section>
 </main>
+<dialog id="sdlg"><div class="dlg">
+  <h3 style="margin:0 0 12px">Settings</h3>
+  <div id="sbody"></div>
+  <div class="actions" style="margin-top:16px;justify-content:flex-end">
+    <button id="sc">Close</button><button id="ss" class="primary">Save</button></div>
+</div></dialog>
 <dialog id="dlg"><div class="dlg"><h3 id="dt" style="margin:0 0 8px"></h3><div id="db"></div>
 <div class="actions" style="margin-top:14px;justify-content:flex-end">
 <button id="dc">Cancel</button><button id="dok" class="primary">Confirm</button></div></div></dialog>
@@ -86,7 +105,7 @@ const TOKEN=${JSON.stringify(token)};
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const usd=n=>n==null?'—':'$'+Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-let STATE=null,LIVE=false;
+let STATE=null,LIVE=false,ACCOUNTS=[];
 
 const api=(p,opt={})=>fetch(p+(p.includes('?')?'&':'?')+'token='+TOKEN,
   {...opt,headers:{'content-type':'application/json','x-cf-token':TOKEN}})
@@ -102,6 +121,10 @@ function confirmDialog(title,html,okLabel){
   });
 }
 
+function accountOptions(sel){
+  return '<option value="">default</option>'+ACCOUNTS.map(a=>
+    '<option value="'+esc(a.accountId)+'"'+(a.accountId===sel?' selected':'')+'>'+esc(a.accountType||a.accountId)+'</option>').join('');
+}
 function orderRows(list,withActions){
   if(!list.length)return '<div class="empty">Nothing here.</div>';
   return '<div class="wrap"><table><thead><tr><th>Trade</th><th>Size</th><th>Disclosure</th><th>Status</th>'+
@@ -110,12 +133,18 @@ function orderRows(list,withActions){
     return '<tr>'+
       '<td><span class="side '+esc(o.side)+'">'+esc(o.side)+'</span> <span class="tick">'+esc(o.ticker)+'</span>'+
       '<div class="sub">'+esc(o.politician||'')+' · '+esc(o.party||'?')+'/'+esc(o.chamber||'?')+'</div></td>'+
-      '<td>'+size+'<div class="sub">reported '+esc(o.reportedRange||'?')+'</div></td>'+
+      '<td>'+size+'<div class="sub">reported '+esc(o.reportedRange||'?')+
+        (o.sizeNote?'<br>'+esc(o.sizeNote):'')+
+        (o.sizeOverrideUsd?'<br><b>override '+usd(o.sizeOverrideUsd)+'</b>':'')+'</div></td>'+
       '<td class="sub">traded '+esc(o.transactionDate)+'<br>disclosed '+esc(o.reportDate)+' · '+esc(o.lagDays)+'d lag</td>'+
       '<td><span class="pill">'+esc(o.status)+'</span>'+(o.lastDryRunAt?'<div class="sub">dry-run done</div>':'')+
         (o.submitError?'<div class="sub">'+esc(o.submitError.slice(0,60))+'</div>':'')+'</td>'+
-      (withActions?'<td><div class="actions"><button class="ap" data-id="'+esc(o.id)+'">Approve</button>'+
-        '<button class="rj danger" data-id="'+esc(o.id)+'">Reject</button></div></td>':'')+
+      (withActions?'<td><div class="actions">'+
+        '<input class="ovr mini" type="number" min="1" step="1" placeholder="size" data-id="'+esc(o.id)+'" value="'+(o.sizeOverrideUsd??'')+'">'+
+        '<select class="acct mini" data-id="'+esc(o.id)+'">'+accountOptions(o.accountId)+'</select>'+
+        '<button class="ap" data-id="'+esc(o.id)+'">Approve</button>'+
+        '<button class="rj danger" data-id="'+esc(o.id)+'">Reject</button></div>'+
+        '<div class="sub">'+esc(o.dataset||'')+(o.bucket?' · '+esc(o.bucket):'')+'</div></td>':'')+
     '</tr>';}).join('')+'</tbody></table></div>';
 }
 
@@ -140,11 +169,17 @@ function render(){
   $('hist').innerHTML=orderRows(s.history,false);
   $('cfg').innerHTML='<div class="wrap"><table><thead><tr><th>Following</th><th>BioGuide ID</th><th>Weight</th></tr></thead><tbody>'+
     s.following.map(f=>'<tr><td>'+esc(f.name||'—')+'</td><td class="tick">'+esc(f.bioGuideId||'—')+'</td><td>'+esc(f.weight)+'</td></tr>').join('')+
-    '</tbody></table></div><div class="sub" style="padding:10px 15px">Max '+esc(s.guardrails.maxNotionalPerTrade)+'/trade · '+
-    esc(s.guardrails.maxOrdersPerDay)+' orders/day · '+esc(s.guardrails.maxOpenPositions)+' positions</div>';
+    '</tbody></table></div><div class="sub" style="padding:10px 15px">'+
+    'Sizing: <b>'+esc(s.settings?.sizing?.mode||'?')+'</b>'+
+    (s.settings?.sizing?.mode==='mirror'?' against '+usd(s.settings.sizing.capitalUsd)+' capital':'')+
+    (s.allocationsLoaded!=null?' · '+s.allocationsLoaded+' portfolios loaded':'')+'<br>'+
+    'Max '+esc(s.guardrails.maxNotionalPerTrade)+'/trade · '+esc(s.guardrails.maxOrdersPerDay)+' orders/day · '+
+    esc(s.guardrails.maxOpenPositions)+' positions · automation '+(s.settings?.automation?.enabled?'ON':'off')+'</div>';
 
   document.querySelectorAll('.ap').forEach(b=>b.onclick=()=>approve(b.dataset.id));
   document.querySelectorAll('.rj').forEach(b=>b.onclick=()=>reject(b.dataset.id));
+  document.querySelectorAll('.ovr').forEach(i=>i.onchange=()=>amend(i.dataset.id,{sizeOverrideUsd:i.value?Number(i.value):null}));
+  document.querySelectorAll('.acct').forEach(sl=>sl.onchange=()=>amend(sl.dataset.id,{accountId:sl.value||null}));
 }
 
 async function approve(id){
@@ -173,9 +208,93 @@ async function reject(id){
   catch(e){await confirmDialog('Failed','<p>'+esc(e.message)+'</p>','Close')}
 }
 
-async function load(){STATE=await api('/api/state');render()}
+async function amend(id,patch){
+  try{await api('/api/amend',{method:'POST',body:JSON.stringify({id,...patch})});await load()}
+  catch(e){await confirmDialog('Could not amend','<p>'+esc(e.message)+'</p>','Close')}
+}
+
+function settingsForm(s){
+  const z=s.settings, ds=s.datasetCatalog.map(d=>{
+    const st=(s.datasetStatus||[]).find(x=>x.id===d.id);
+    const on=z.datasets?.[d.id]===true;
+    return '<div class="ds"><input type="checkbox" id="ds_'+d.id+'"'+(on?' checked':'')+'>'+
+      '<label for="ds_'+d.id+'" style="margin:0;font-weight:500">'+esc(d.label)+'</label>'+
+      '<span class="pill">'+esc(d.plan)+'</span>'+
+      (st&&!st.ok?'<span class="bad">'+esc(st.error)+'</span>':'')+
+      (st&&st.ok?'<span class="sub">'+st.count+' rows</span>':'')+'</div>';
+  }).join('');
+  return '<div class="fld"><label>Sizing mode</label><select id="s_mode">'+
+      ['mirror','fixed','tiered'].map(m=>'<option value="'+m+'"'+(z.sizing.mode===m?' selected':'')+'>'+
+        (m==='mirror'?'Mirror their portfolio allocation':m==='fixed'?'Fixed amount per trade':'Tiered by disclosed size')+'</option>').join('')+
+      '</select><div class="hint">Mirror: if they hold 8% of their portfolio in a stock, you commit 8% of your capital below.</div></div>'+
+    '<div class="row"><div class="fld"><label>Capital base</label><input id="s_cap" type="number" min="0" value="'+esc(z.sizing.capitalUsd)+'">'+
+      '<div class="hint">Allocation percentages apply to this.</div></div>'+
+      '<div class="fld"><label>Min per trade</label><input id="s_min" type="number" min="0" value="'+esc(z.sizing.minNotionalUsd)+'"></div>'+
+      '<div class="fld"><label>Max per trade</label><input id="s_max" type="number" min="0" value="'+esc(z.sizing.maxNotionalUsd)+'"></div></div>'+
+    '<div class="fld"><label>Datasets</label>'+ds+'</div>'+
+    '<div class="fld"><label>Default account</label><select id="s_acct">'+accountOptions(z.routing?.defaultAccountId)+'</select></div>'+
+    '<div class="fld"><label><input type="checkbox" id="s_auto"'+(z.automation?.enabled?' checked':'')+'>Enable automation</label>'+
+      '<div class="hint">Polls and submits every order that passes the guardrails, with no click.</div></div>'+
+    '<div class="fld"><label><input type="checkbox" id="s_gate"'+(z.automation?.requireProvenSubmitPath?' checked':'')+'>Require one successful manual order first</label>'+
+      '<div class="hint">placeOrder has never run against real Public infrastructure. This keeps an unattended loop from being the first thing to try it.</div></div>'+
+    '<div class="danger-zone"><label><input type="checkbox" id="s_dry"'+(s.dryRun?'':' checked')+
+      (s.dryRunForcedByEnv?' disabled':'')+'><b>Live trading</b> — submit real orders with real money</label>'+
+      (s.dryRunForcedByEnv?'<div class="hint">DRY_RUN is set in your environment or .env, which overrides this. Remove it there to enable.</div>'
+        :'<div class="hint">Leave off to keep logging payloads without sending them.</div>')+'</div>';
+}
+
+async function openSettings(){
+  $('sbody').innerHTML=settingsForm(STATE);
+  $('ss').onclick=async()=>{
+    const datasets={};STATE.datasetCatalog.forEach(d=>{datasets[d.id]=$('ds_'+d.id).checked});
+    const goingLive=$('s_dry').checked&&STATE.dryRun;
+    if(goingLive){
+      $('sdlg').close();
+      const ok=await confirmDialog('Turn on live trading',
+        '<p style="color:var(--live)"><b>Approvals will place real orders in your account.</b></p>'+
+        '<p class="sub">placeOrder has not yet been verified against real Public infrastructure. Consider making your first live order a small one on a liquid ticker during market hours, and checking the Public app straight after.</p>',
+        'Enable live trading');
+      if(!ok){$('sdlg').showModal();return}
+    }
+    try{
+      await api('/api/settings',{method:'POST',body:JSON.stringify({
+        dryRun:!$('s_dry').checked,
+        datasets,
+        sizing:{mode:$('s_mode').value,capitalUsd:Number($('s_cap').value),
+                minNotionalUsd:Number($('s_min').value),maxNotionalUsd:Number($('s_max').value)},
+        routing:{defaultAccountId:$('s_acct').value||null},
+        automation:{enabled:$('s_auto').checked,requireProvenSubmitPath:$('s_gate').checked}
+      })});
+      $('sdlg').close();await load();
+    }catch(e){await confirmDialog('Could not save','<p>'+esc(e.message)+'</p>','Close')}
+  };
+  $('sc').onclick=()=>$('sdlg').close();
+  $('sdlg').showModal();
+}
+
+async function load(){
+  STATE=await api('/api/state');
+  try{ACCOUNTS=(await api('/api/accounts')).accounts||[]}catch{ACCOUNTS=[]}
+  render();
+}
 
 $('refresh').onclick=load;
+$('settings').onclick=openSettings;
+$('auto').onclick=async()=>{
+  const on=STATE.settings?.automation?.enabled;
+  if(!on){await confirmDialog('Automation is off','<p class="sub">Enable it in Settings first.</p>','Close');return}
+  if(LIVE&&!await confirmDialog('Run automation now',
+    '<p style="color:var(--live)"><b>This submits every queued order that passes the guardrails, with real money.</b></p>','Run'))return;
+  $('auto').disabled=true;
+  try{
+    const r=await api('/api/automate',{method:'POST'});await load();
+    await confirmDialog('Automation',r.ran
+      ?'<p>Queued '+r.queued+'. Submitted '+r.results.filter(x=>x.ok).length+', blocked '+r.results.filter(x=>!x.ok).length+'.</p>'+
+        (r.results.filter(x=>!x.ok).length?'<pre>'+esc(r.results.filter(x=>!x.ok).map(x=>x.ticker+': '+x.error).join('\n'))+'</pre>':'')
+      :'<p class="sub">'+esc(r.reason)+'</p>','Close');
+  }catch(e){await confirmDialog('Failed','<p>'+esc(e.message)+'</p>','Close')}
+  finally{$('auto').disabled=false}
+};
 $('poll').onclick=async()=>{$('poll').disabled=true;
   try{const r=await api('/api/poll',{method:'POST'});await load();
     await confirmDialog('Fetched','<p>'+r.total+' disclosures · <b>'+r.queued+' queued</b> · '+r.skipped+' filtered.</p>','Close')}

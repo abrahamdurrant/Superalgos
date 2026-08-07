@@ -144,9 +144,11 @@ export class PublicClient {
 
   // POST /userapigateway/trading/{accountId}/order
   // orderId is the idempotency key: resubmitting the same UUID will not double-fill.
-  async placeOrder (orderBody) {
-    const accountId = await this.resolveAccountId()
-    return this.request(`/userapigateway/trading/${accountId}/order`, { method: 'POST', body: orderBody })
+  async placeOrder (orderBody, { accountId } = {}) {
+    // An explicit per-order account wins, so a trade can be routed to the IRA
+    // or the taxable account independently of the configured default.
+    const target = accountId || await this.resolveAccountId()
+    return this.request(`/userapigateway/trading/${target}/order`, { method: 'POST', body: orderBody })
   }
 
   async getOrder (orderId) {
