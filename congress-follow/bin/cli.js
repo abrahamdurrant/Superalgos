@@ -5,7 +5,7 @@ import { QuiverClient } from '../src/quiver.js'
 import { PublicClient } from '../src/public-client.js'
 import { config } from '../src/config.js'
 import { log } from '../src/log.js'
-import { SECRET_VARS, storeSecret, deleteSecret, describeSecrets, doctor, readHidden, keychainName, keychainAvailable } from '../src/secrets.js'
+import { SECRET_VARS, storeSecret, deleteSecret, describeSecrets, doctor, readHidden, keychainName, keychainAvailable, selfTest } from '../src/secrets.js'
 
 const [, , command, ...rest] = process.argv
 const flags = new Set(rest.filter(a => a.startsWith('--')))
@@ -143,6 +143,20 @@ async function main () {
         break
       }
 
+      if (sub === 'selftest') {
+        console.log(`Testing round-trip through ${keychainName()}...\n`)
+        const r = selfTest()
+        if (r.ok) {
+          console.log(`PASS  ${r.detail}`)
+          console.log(`\nYour keychain works. Keys stored here will read back correctly.`)
+        } else {
+          console.log(`FAIL  at the "${r.stage}" stage`)
+          console.log(`      ${r.detail}`)
+          process.exitCode = 1
+        }
+        break
+      }
+
       if (sub === 'doctor') {
         const findings = doctor()
         const icon = { ok: '  ok  ', warn: ' warn ', bad: ' RISK ' }
@@ -157,7 +171,9 @@ async function main () {
       // default: status
       console.log(`Keychain backend: ${keychainName()}${keychainAvailable() ? '' : ' (unavailable)'}\n`)
       for (const s of describeSecrets()) {
-        console.log(`${s.varName.padEnd(20)} ${s.configured ? 'configured' : 'MISSING   '}  ${s.source ?? ''} ${s.fingerprint ? `[${s.fingerprint}]` : ''}`)
+        const state = s.error ? 'UNREADABLE' : (s.configured ? 'configured' : 'MISSING   ')
+        console.log(`${s.varName.padEnd(20)} ${state}  ${s.source ?? ''} ${s.fingerprint ? `[${s.fingerprint}]` : ''}`)
+        if (s.error) console.log(`  ${s.error.split('\n').join('\n  ')}`)
       }
       console.log(`\nSet one with: congress-follow secrets set <VAR>`)
       break
@@ -194,6 +210,7 @@ Secrets:
   congress-follow secrets              Show where each key resolves from
   congress-follow secrets set <VAR>    Store a key in the OS keychain (hidden input)
   congress-follow secrets rm <VAR>     Remove a key from the OS keychain
+  congress-follow secrets selftest     Prove the OS keychain round-trips on this machine
   congress-follow secrets doctor       Audit local key storage and file permissions
 
 Safety: DRY_RUN defaults to true. Nothing reaches Public until you set DRY_RUN=false.`)

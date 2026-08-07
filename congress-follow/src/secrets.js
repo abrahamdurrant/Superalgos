@@ -89,11 +89,26 @@ function fromKeychain (varName) {
       case 'windows': {
         const file = dpapiFile(account)
         if (!existsSync(file)) return null
-        value = execFileSync('powershell', ['-NoProfile', '-Command',
-          `$s = Get-Content -Raw ${psQuote(file)} | ConvertTo-SecureString; ` +
-          '[Runtime.InteropServices.Marshal]::PtrToStringAuto(' +
-          '[Runtime.InteropServices.Marshal]::SecureStringToBSTR($s))'
-        ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+        // ReadAllText + Trim, not Get-Content -Raw: Set-Content appends a CRLF and
+        // ConvertTo-SecureString rejects the trailing newline, which used to fail
+        // silently and report a stored key as "not configured".
+        try {
+          value = execFileSync('powershell', ['-NoProfile', '-Command',
+            `$e = [IO.File]::ReadAllText(${psQuote(file)}).Trim(); ` +
+            '$s = ConvertTo-SecureString $e; ' +
+            '[Runtime.InteropServices.Marshal]::PtrToStringAuto(' +
+            '[Runtime.InteropServices.Marshal]::SecureStringToBSTR($s))'
+          ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+        } catch (err) {
+          // The file exists but will not decrypt. Never let this look like
+          // "no key stored" - that sends you hunting in the wrong place.
+          throw new Error(
+            `Found an encrypted key at ${file} but could not decrypt it.\n` +
+            '  DPAPI ties the key to the Windows account that stored it, so this happens\n' +
+            '  after a reinstall or profile change. Re-store it:\n' +
+            `    node bin/cli.js secrets rm ${varName}\n` +
+            `    node bin/cli.js secrets set ${varName}`)
+        }
         break
       }
       default:
@@ -128,7 +143,8 @@ export function storeSecret (varName, value) {
       mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
       const r = spawnSync('powershell', ['-NoProfile', '-Command',
         `$in = [Console]::In.ReadToEnd().Trim(); ` +
-        `ConvertTo-SecureString $in -AsPlainText -Force | ConvertFrom-SecureString | Set-Content -Path ${psQuote(file)}`
+        `$enc = ConvertTo-SecureString $in -AsPlainText -Force | ConvertFrom-SecureString; ` +
+        `[IO.File]::WriteAllText(${psQuote(file)}, $enc)`
       ], { input: value, stdio: ['pipe', 'ignore', 'pipe'] })
       if (r.status !== 0) throw new Error(`DPAPI write failed: ${r.stderr}`)
       chmodSync(file, 0o600)
@@ -201,15 +217,56 @@ export function resolveSecret (varName, { required = true } = {}) {
 /** Describe where each secret would come from, without revealing any value. */
 export function describeSecrets () {
   return Object.keys(SECRET_VARS).map(varName => {
-    const found = resolveSecret(varName, { required: false })
+    let found = null
+    let error = null
+    try {
+      found = resolveSecret(varName, { required: false })
+    } catch (err) {
+      // A stored-but-unreadable key is a distinct state from "not configured".
+      error = err.message
+    }
     return {
       varName,
       configured: Boolean(found),
+      error,
       source: found?.source ?? null,
       // Enough to confirm you stored the right thing, not enough to use.
       fingerprint: found ? `${found.value.slice(0, 3)}...${found.value.slice(-2)} (${found.value.length} chars)` : null
     }
   })
+}
+
+/**
+ * Round-trip a throwaway value through the OS keychain to prove it works on
+ * this machine. Lets you validate the whole path before you own any real key.
+ */
+export function selfTest () {
+  const probe = `selftest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  const varName = 'QUIVER_API_KEY'
+  const original = SECRET_VARS[varName].account
+  SECRET_VARS[varName].account = 'selftest-probe'
+  try {
+    if (!keychainAvailable()) {
+      return { ok: false, backend: keychainName(), stage: 'availability', detail: 'No keychain tooling found on this system.' }
+    }
+    try { storeSecret(varName, probe) } catch (err) {
+      return { ok: false, backend: keychainName(), stage: 'write', detail: err.message }
+    }
+    cache.delete(varName)
+    let readBack
+    try { readBack = fromKeychain(varName) } catch (err) {
+      return { ok: false, backend: keychainName(), stage: 'read', detail: err.message }
+    }
+    if (!readBack) return { ok: false, backend: keychainName(), stage: 'read', detail: 'Wrote a value but read back nothing.' }
+    if (readBack.value !== probe) {
+      return { ok: false, backend: keychainName(), stage: 'compare', detail: `Read back ${readBack.value.length} chars, expected ${probe.length}. The value was altered in transit.` }
+    }
+    return { ok: true, backend: keychainName(), stage: 'complete', detail: `Stored, read back and matched a ${probe.length}-character probe.` }
+  } finally {
+    try { deleteSecret(varName) } catch { /* best effort cleanup */ }
+    SECRET_VARS[varName].account = original
+    cache.delete(varName)
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -225,7 +282,8 @@ export function doctor () {
   const bad = (msg) => findings.push({ level: 'bad', msg })
 
   // 1. Where are the secrets coming from?
-  for (const { varName, configured, source } of describeSecrets()) {
+  for (const { varName, configured, source, error } of describeSecrets()) {
+    if (error) { bad(`${varName} is stored but could not be read. ${error.split('\n')[0]}`); continue }
     if (!configured) { warn(`${varName} is not configured.`); continue }
     if (source?.includes('command')) ok(`${varName} resolves from a password manager at run time.`)
     else if (source === keychainName()) ok(`${varName} is stored in ${keychainName()}.`)

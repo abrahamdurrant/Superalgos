@@ -120,3 +120,56 @@ test('PowerShell paths containing an apostrophe are escaped, not broken', () => 
   // Both the read and write commands must use it.
   assert.equal((src.match(/psQuote\(file\)/g) || []).length, 2)
 })
+
+test('the Windows DPAPI path trims before decrypting', () => {
+  // Regression: Set-Content appended a CRLF that ConvertTo-SecureString rejected,
+  // so a successfully stored key reported as "not configured" with no error.
+  const src = readFileSync(resolve(root, 'src/secrets.js'), 'utf8')
+  const code = src.split('\n').filter(l => !l.trim().startsWith('//')).join('\n')
+  assert.doesNotMatch(code, /Set-Content/, 'Set-Content appends a newline that breaks decryption')
+  assert.doesNotMatch(code, /Get-Content/, 'Get-Content -Raw returns the trailing newline')
+  assert.match(code, /ReadAllText\(\$\{psQuote\(file\)\}\)\.Trim\(\)/, 'the read path must trim')
+  assert.match(code, /WriteAllText/, 'the write path must not append a newline')
+})
+
+test('a stored-but-unreadable key is reported, never silently treated as absent', () => {
+  const src = readFileSync(resolve(root, 'src/secrets.js'), 'utf8')
+  // The Windows read catch must throw rather than fall through to null.
+  assert.match(src, /could not decrypt it/)
+  // describeSecrets must convert that throw into a reported error, not crash.
+  assert.match(src, /error = err\.message/)
+})
+
+test('describeSecrets never throws, even when a backend fails', () => {
+  const out = run(
+    `import { describeSecrets } from './src/secrets.js'
+     const r = describeSecrets()
+     console.log(JSON.stringify(r.map(x => ({ v: x.varName, c: x.configured, e: Boolean(x.error) }))))`
+  )
+  const rows = JSON.parse(out)
+  assert.equal(rows.length, 2)
+  assert.ok(rows.every(r => typeof r.c === 'boolean'))
+})
+
+test('selfTest reports a structured failure instead of throwing when no keychain exists', () => {
+  const out = run(
+    `import { selfTest } from './src/secrets.js'
+     console.log(JSON.stringify(selfTest()))`
+  )
+  const r = JSON.parse(out)
+  assert.equal(typeof r.ok, 'boolean')
+  assert.ok(['availability', 'write', 'read', 'compare', 'complete'].includes(r.stage))
+  assert.ok(r.backend && r.detail)
+})
+
+test('selfTest restores the real account name after running', () => {
+  const out = run(
+    `import { selfTest, SECRET_VARS } from './src/secrets.js'
+     const before = SECRET_VARS.QUIVER_API_KEY.account
+     selfTest()
+     console.log(JSON.stringify({ before, after: SECRET_VARS.QUIVER_API_KEY.account }))`
+  )
+  const { before, after } = JSON.parse(out)
+  assert.equal(after, before, 'the probe account name must not leak into normal operation')
+  assert.equal(after, 'quiver-api-key')
+})
