@@ -218,13 +218,26 @@ async function main () {
 
     case 'politicians': {
       const quiver = new QuiverClient()
-      const roster = await quiver.politicians()
-      const q = args.join(' ').toLowerCase()
-      const hits = q ? roster.filter(p => JSON.stringify(p).toLowerCase().includes(q)) : roster
-      console.log(`${hits.length} match(es):`)
-      hits.slice(0, 50).forEach(p => {
-        console.log(`  ${String(p.BioGuideID ?? p.bioguide_id ?? '?').padEnd(10)} ${p.Representative ?? p.Name ?? ''} ${p.Party ?? ''} ${p.House ?? ''}`)
-      })
+      const hits = await quiver.findPoliticians(args.join(' '))
+      if (hits.length === 0) {
+        console.log('No matches. Try a surname on its own, e.g. "pelosi".')
+        break
+      }
+      const usable = hits.filter(h => h.bioGuideId)
+      console.log(`${hits.length} match(es); ${usable.length} with a BioGuide ID you can follow:\n`)
+      for (const h of hits) {
+        const id = h.bioGuideId ?? '(no BioGuide ID)'
+        const mark = h.seenTrading ? 'trades seen' : 'roster only'
+        console.log(`  ${String(id).padEnd(12)} ${String(h.name).padEnd(28)} ${String(h.party ?? '').padEnd(12)} ${String(h.chamber ?? '').padEnd(16)} ${mark}`)
+      }
+      if (usable.length > 0) {
+        console.log('\nAdd to config/watchlist.json, e.g.:')
+        const e = usable[0]
+        console.log(`  { "bioGuideId": "${e.bioGuideId}", "name": "${e.name}", "weight": 1.0, "enabled": true }`)
+      } else {
+        console.log('\nNone of these carry a BioGuide ID in the trade feed, so they cannot be')
+        console.log('matched reliably. Pick someone marked "trades seen".')
+      }
       break
     }
 

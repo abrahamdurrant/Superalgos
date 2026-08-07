@@ -107,3 +107,54 @@ test('the auth error no longer blames the subscription outright', async () => {
     })
   } finally { s.close() }
 })
+
+test('politicians() unwraps the {data:[...]} envelope the live API actually returns', async () => {
+  // Verified against the live API: this endpoint wraps rows, unlike the trading
+  // endpoints. The old code checked Array.isArray and silently returned [].
+  const server = createServer((req, res) => {
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({ data: [{ BioGuideID: null, CandidateID: 'H2LA03121', Name: 'Holden Hoggatt' }] }))
+  })
+  await new Promise(r => server.listen(0, r))
+  try {
+    const q = new QuiverClient({ baseUrl: `http://localhost:${server.address().port}`, apiKey: 'k' })
+    const rows = await q.politicians()
+    assert.equal(rows.length, 1, 'must unwrap data[], not return empty')
+    assert.equal(rows[0].Name, 'Holden Hoggatt')
+  } finally { server.close() }
+})
+
+test('an unrecognised response shape yields empty but is not silent', async () => {
+  const server = createServer((req, res) => {
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({ unexpected: 'shape' }))
+  })
+  await new Promise(r => server.listen(0, r))
+  try {
+    const q = new QuiverClient({ baseUrl: `http://localhost:${server.address().port}`, apiKey: 'k' })
+    const rows = await q.liveCongressTrading()
+    assert.deepEqual(rows, [])
+  } finally { server.close() }
+})
+
+test('findPoliticians prefers IDs confirmed in the trade feed', async () => {
+  const server = createServer((req, res) => {
+    res.setHeader('content-type', 'application/json')
+    if (req.url.includes('congresstrading')) {
+      res.end(JSON.stringify([
+        { Representative: 'Nancy Pelosi', BioGuideID: 'P000197', Party: 'Democratic', House: 'Representatives' }
+      ]))
+    } else {
+      res.end(JSON.stringify({ data: [{ BioGuideID: null, Name: 'Nancy Pelosi Jr' }] }))
+    }
+  })
+  await new Promise(r => server.listen(0, r))
+  try {
+    const q = new QuiverClient({ baseUrl: `http://localhost:${server.address().port}`, apiKey: 'k' })
+    const hits = await q.findPoliticians('pelosi')
+    assert.equal(hits.length, 2)
+    assert.equal(hits[0].bioGuideId, 'P000197', 'trade-feed entries rank first')
+    assert.equal(hits[0].seenTrading, true)
+    assert.equal(hits[1].seenTrading, false)
+  } finally { server.close() }
+})

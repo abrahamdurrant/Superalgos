@@ -15,6 +15,20 @@ export class QuiverClient {
     this._scheme = null
   }
 
+  /**
+   * Quiver is inconsistent: the trading endpoints return a bare array, while
+   * /beta/bulk/congress/politicians wraps rows in {"data": [...]}. Silently
+   * treating an unrecognised shape as "no rows" hides a real API change behind
+   * an empty result, so warn loudly instead.
+   */
+  #rows (body, path) {
+    if (Array.isArray(body)) return body
+    if (body && Array.isArray(body.data)) return body.data
+    if (body && Array.isArray(body.results)) return body.results
+    log.warn(`Quiver ${path} returned an unrecognised shape (${body === null ? 'null' : typeof body}${body && !Array.isArray(body) ? ': keys ' + Object.keys(body).slice(0, 6).join(',') : ''}). Treating as empty.`)
+    return []
+  }
+
   // Quiver's official Python client sends a hardcoded X-CSRFToken alongside the
   // Authorization header. Their backend is Django REST Framework, which can reject
   // requests without it. Mirroring their client exactly removes a variable.
@@ -102,22 +116,70 @@ export class QuiverClient {
 
   // GET /beta/live/congresstrading -> recently disclosed congressional trades.
   async liveCongressTrading ({ representative, normalized = true } = {}) {
-    const rows = await this.#get('/beta/live/congresstrading', { representative, normalized })
-    log.debug('quiver live congresstrading', { count: Array.isArray(rows) ? rows.length : 0 })
-    return Array.isArray(rows) ? rows : []
+    const body = await this.#get('/beta/live/congresstrading', { representative, normalized })
+    const rows = this.#rows(body, '/beta/live/congresstrading')
+    log.debug('quiver live congresstrading', { count: rows.length })
+    return rows
   }
 
   // GET /beta/bulk/congresstrading -> paginated history, useful for backfill/backtests.
   async bulkCongressTrading ({ bioguideId, date, ticker, page = 1, pageSize = 100, nonstock = false, normalized = true, version = 'V2' } = {}) {
-    const rows = await this.#get('/beta/bulk/congresstrading', {
+    const body = await this.#get('/beta/bulk/congresstrading', {
       bioguide_id: bioguideId, date, ticker, page, page_size: pageSize, nonstock, normalized, version
     })
-    return Array.isArray(rows) ? rows : []
+    return this.#rows(body, '/beta/bulk/congresstrading')
   }
 
   // GET /beta/bulk/congress/politicians -> roster, used to resolve names to BioGuide IDs.
   async politicians () {
-    const rows = await this.#get('/beta/bulk/congress/politicians', {})
-    return Array.isArray(rows) ? rows : []
+    // Verified against the live API: this endpoint wraps rows in {"data": [...]}.
+    const body = await this.#get('/beta/bulk/congress/politicians', {})
+    return this.#rows(body, '/beta/bulk/congress/politicians')
+  }
+
+  /**
+   * Find the BioGuide ID to put in a watchlist.
+   *
+   * The roster endpoint carries null BioGuideID for some entries, and the
+   * watchlist must match whatever the *trading* feed reports - so search the
+   * live trade feed too and mark which IDs are confirmed usable.
+   */
+  async findPoliticians (query) {
+    const q = String(query || '').toLowerCase().trim()
+    const match = name => !q || String(name || '').toLowerCase().includes(q)
+    const byId = new Map()
+
+    const trades = await this.liveCongressTrading({ normalized: true }).catch(() => [])
+    for (const t of trades) {
+      if (!match(t.Representative)) continue
+      const key = t.BioGuideID || `name:${t.Representative}`
+      if (!byId.has(key)) {
+        byId.set(key, {
+          bioGuideId: t.BioGuideID || null,
+          name: t.Representative,
+          party: t.Party || null,
+          chamber: t.House || null,
+          seenTrading: true
+        })
+      }
+    }
+
+    const roster = await this.politicians().catch(() => [])
+    for (const p of roster) {
+      const name = p.Name || p.Representative
+      if (!match(name)) continue
+      const key = p.BioGuideID || `name:${name}`
+      if (byId.has(key)) continue
+      byId.set(key, {
+        bioGuideId: p.BioGuideID || null,
+        name,
+        party: p.Party || null,
+        chamber: p.House || p.Chamber || null,
+        seenTrading: false
+      })
+    }
+
+    // Entries confirmed in the trade feed are the ones a watchlist can match.
+    return [...byId.values()].sort((a, b) => Number(b.seenTrading) - Number(a.seenTrading))
   }
 }
