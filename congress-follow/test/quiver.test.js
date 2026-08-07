@@ -71,3 +71,44 @@ test('a 401 on both schemes blames the subscription, not the key format', async 
     assert.deepEqual(s.seen, ['Token', 'Bearer'])
   } finally { s.close() }
 })
+
+test('probe() reports every endpoint and scheme without throwing on 401', async () => {
+  const s = await stubQuiver({ accepts: 'NOPE' })
+  try {
+    const q = new QuiverClient({ baseUrl: s.url, apiKey: 'k' })
+    const rows = await q.probe()
+    assert.equal(rows.length, 8, '4 endpoints x 2 schemes')
+    assert.ok(rows.every(r => r.status === 401))
+    assert.ok(rows.every(r => typeof r.body === 'string'))
+  } finally { s.close() }
+})
+
+test('requests carry the X-CSRFToken header the vendor client sends', async () => {
+  let headers = null
+  const server = createServer((req, res) => {
+    headers = req.headers
+    res.setHeader('content-type', 'application/json')
+    res.end('[]')
+  })
+  await new Promise(r => server.listen(0, r))
+  try {
+    const q = new QuiverClient({ baseUrl: `http://localhost:${server.address().port}`, apiKey: 'k' })
+    await q.liveCongressTrading()
+    assert.ok(headers['x-csrftoken'], 'X-CSRFToken must be sent')
+    assert.equal(headers.authorization, 'Token k')
+    assert.equal(headers.accept, 'application/json')
+  } finally { server.close() }
+})
+
+test('the auth error no longer blames the subscription outright', async () => {
+  const s = await stubQuiver({ accepts: 'NOPE' })
+  try {
+    const q = new QuiverClient({ baseUrl: s.url, apiKey: 'k' })
+    await assert.rejects(() => q.liveCongressTrading(), err => {
+      assert.doesNotMatch(err.message, /almost certainly the subscription/)
+      assert.match(err.message, /does NOT by itself mean your subscription is wrong/)
+      assert.match(err.message, /quiver-check/)
+      return true
+    })
+  } finally { s.close() }
+})

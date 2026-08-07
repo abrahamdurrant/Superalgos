@@ -15,10 +15,49 @@ export class QuiverClient {
     this._scheme = null
   }
 
+  // Quiver's official Python client sends a hardcoded X-CSRFToken alongside the
+  // Authorization header. Their backend is Django REST Framework, which can reject
+  // requests without it. Mirroring their client exactly removes a variable.
+  static CSRF = 'TyTJwjuEC7VV7mOqZ622haRaaUr0x0Ng4nrwSRFKQs7vdoBcJlK9qjAS69ghzhFu'
+
   async #fetchWith (scheme, url) {
     return fetch(url, {
-      headers: { Authorization: `${scheme} ${this.apiKey}`, Accept: 'application/json' }
+      headers: {
+        accept: 'application/json',
+        'X-CSRFToken': QuiverClient.CSRF,
+        Authorization: `${scheme} ${this.apiKey}`
+      }
     })
+  }
+
+  /**
+   * Probe several endpoints and report the raw status and body for each.
+   * Distinguishes a bad key (every endpoint 401s identically) from a plan that
+   * does not entitle one particular dataset (mixed statuses).
+   */
+  async probe () {
+    const targets = [
+      { name: 'live congress trading', path: '/beta/live/congresstrading' },
+      { name: 'bulk congress trading', path: '/beta/bulk/congresstrading?page=1&page_size=1' },
+      { name: 'politicians roster', path: '/beta/bulk/congress/politicians' },
+      { name: 'historical by ticker', path: '/beta/historical/congresstrading/AAPL' }
+    ]
+    const results = []
+    for (const t of targets) {
+      for (const scheme of ['Token', 'Bearer']) {
+        let status = null
+        let body = ''
+        try {
+          const res = await this.#fetchWith(scheme, new URL(this.baseUrl + t.path))
+          status = res.status
+          body = (await res.text()).slice(0, 160)
+        } catch (err) {
+          body = `request failed: ${err.message}`
+        }
+        results.push({ ...t, scheme, status, body })
+      }
+    }
+    return results
   }
 
   async #get (path, params = {}) {
@@ -43,11 +82,14 @@ export class QuiverClient {
 
     if (res.status === 401 || res.status === 403) {
       throw new Error(
-        `Quiver rejected the API key (HTTP ${res.status}) using both the "Token" and "Bearer" auth schemes.\n` +
-        '  The key itself is being sent correctly, so this is almost certainly the subscription:\n' +
-        '  the Quiver API has no free tier, and a web Premium plan does NOT include API access.\n' +
-        '  Congress Trading requires the API Hobbyist plan ($30/mo, or $25/mo billed annually).\n' +
-        '  Verify at https://api.quiverquant.com/pricing/ and check the key at https://www.quiverquant.com/api/')
+        `Quiver rejected this request (HTTP ${res.status}) on ${path} using both the "Token" and "Bearer" schemes.\n` +
+        '  This does NOT by itself mean your subscription is wrong. Possible causes:\n' +
+        '    - the stored key is truncated or has stray characters (check the char count:\n' +
+        '        node bin/cli.js secrets)\n' +
+        '    - your plan does not entitle this particular dataset, even if others work\n' +
+        '    - the key was regenerated on quiverquant.com and the stored copy is stale\n' +
+        '  Run the per-endpoint diagnostic to tell these apart:\n' +
+        '        node bin/cli.js quiver-check')
     }
     if (res.status === 429) {
       throw new Error('Quiver rate limit hit (HTTP 429). Increase POLL_MINUTES or reduce watchlist size.')

@@ -179,6 +179,38 @@ async function main () {
       break
     }
 
+    case 'quiver-check': {
+      const quiver = new QuiverClient()
+      const { describeSecrets } = await import('../src/secrets.js')
+      const key = describeSecrets().find(x => x.varName === 'QUIVER_API_KEY')
+      console.log(`Stored key: ${key?.fingerprint ?? 'MISSING'}  (source: ${key?.source ?? 'none'})`)
+      console.log('Compare that character count against the token on https://www.quiverquant.com/api/\n')
+
+      const rows = await quiver.probe()
+      let okAny = false
+      for (const r of rows) {
+        const mark = r.status === 200 ? 'OK  ' : `${r.status ?? 'ERR'}`
+        if (r.status === 200) okAny = true
+        console.log(`${mark.padEnd(5)} ${r.scheme.padEnd(6)} ${r.name.padEnd(24)} ${r.body.replace(/\s+/g, ' ').slice(0, 90)}`)
+      }
+
+      console.log('')
+      const codes = new Set(rows.map(r => r.status))
+      if (okAny && codes.size > 1) {
+        console.log('Diagnosis: some endpoints work and others do not, so the key is VALID.')
+        console.log('           The failing datasets are not entitled by your plan.')
+      } else if (!okAny && codes.size === 1 && codes.has(401)) {
+        console.log('Diagnosis: every endpoint returns 401 on both schemes.')
+        console.log('           That points at the key itself - most likely truncated, stale, or')
+        console.log('           regenerated since you stored it. Re-copy it and run:')
+        console.log('             node bin/cli.js secrets rm QUIVER_API_KEY')
+        console.log('             node bin/cli.js secrets set QUIVER_API_KEY')
+      } else if (okAny) {
+        console.log('Diagnosis: the key works. Everything needed by this tool is reachable.')
+      }
+      break
+    }
+
     case 'politicians': {
       const quiver = new QuiverClient()
       const roster = await quiver.politicians()
@@ -205,6 +237,7 @@ Usage:
   congress-follow sync                 Refresh status of submitted orders
   congress-follow status               Show Public accounts and open positions
   congress-follow politicians <query>  Look up BioGuide IDs for your watchlist
+  congress-follow quiver-check         Probe each Quiver endpoint and diagnose a 401
 
 Secrets:
   congress-follow secrets              Show where each key resolves from
