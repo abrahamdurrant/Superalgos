@@ -15,6 +15,34 @@ export class Engine {
   }
 
   /**
+   * Evaluate the live feed WITHOUT persisting anything.
+   *
+   * Lets the UI show what would queue and, just as usefully, what is being
+   * filtered out and why - so the watchlist and rules can be tuned before a
+   * poll commits any of it to the store.
+   */
+  async preview () {
+    const trades = await this.quiver.liveCongressTrading({ normalized: true })
+    const { signals, skipped } = evaluateAll(trades, this.watchlist)
+    const seen = t => this.store.hasSeen(tradeKey(t))
+    return {
+      total: trades.length,
+      wouldQueue: signals.filter(s => !seen(s.trade)),
+      alreadyHandled: signals.filter(s => seen(s.trade)),
+      filtered: skipped.map(s => ({
+        reason: s.reason,
+        reconsiderable: s.permanent === false,
+        ticker: s.trade.Ticker,
+        politician: s.trade.Representative,
+        transaction: s.trade.Transaction,
+        range: s.trade.Range,
+        transactionDate: s.trade.TransactionDate,
+        reportDate: s.trade.ReportDate
+      }))
+    }
+  }
+
+  /**
    * Fetch new disclosures and queue anything actionable as a PENDING order.
    * Nothing is sent to the broker here - approval is a separate, explicit step.
    */

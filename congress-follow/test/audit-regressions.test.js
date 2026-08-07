@@ -190,3 +190,20 @@ test('dry runs never count against the daily submission cap', async () => {
   await e.approve(queued[0].id)
   assert.equal(e.store.countOrdersSince(new Date().toISOString().slice(0, 10)), 0)
 })
+
+// ---- Regression: locking must work before the data directory exists ----
+test('a first run creates the data directory rather than failing on the lock file', async () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'cf-')), 'nested', 'deeper', 'store.json')
+  const store = new Store(path)                    // directory does not exist yet
+  store.withLock(s => s.markSeen('k', { outcome: 'TEST' }))
+  assert.equal(store.hasSeen('k'), true)
+  assert.ok(JSON.parse(readFileSync(path, 'utf8')).seenTrades.k)
+})
+
+test('poll() succeeds on a completely fresh install', async () => {
+  process.env.DRY_RUN = 'true'
+  const path = join(mkdtempSync(join(tmpdir(), 'cf-')), 'data', 'store.json')
+  const e = engineOn(path, [trade()])
+  const { queued } = await e.poll()                // this threw ENOENT before the fix
+  assert.equal(queued.length, 1)
+})

@@ -13,6 +13,9 @@ export class Store {
   constructor (path) {
     this.path = path
     this.lockPath = `${path}.lock`
+    // The lock file lives beside the store, so its directory must exist before
+    // the first lock is taken - #save() creating it later is too late.
+    mkdirSync(dirname(this.path), { recursive: true })
     this.reload()
   }
 
@@ -33,6 +36,7 @@ export class Store {
   }
 
   #acquireLock () {
+    mkdirSync(dirname(this.lockPath), { recursive: true })
     const deadline = Date.now() + LOCK_TIMEOUT_MS
     for (;;) {
       try {
